@@ -1,0 +1,11 @@
+*.json*
+*.mp4*
+*.pkl*
+*.egg-info/
+*.pdf*
+*.pyc*
+*.svg*
+*.dot*
+*.yml*
+*venv*
+*.vscode*

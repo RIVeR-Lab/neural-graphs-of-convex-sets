@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neural-graphs-of-convex-sets"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+# Dependencies are managed via `requirements.txt` (pip).
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["planning_through_contact*"]
+
+[tool.setuptools.package-data]
+planning_through_contact = [
+  "**/*.yaml",
+  "**/*.yml",
+  "**/*.urdf",
+  "**/*.sdf",
+  "**/*.xml",
+  "**/*.png",
+  "**/*.gif",
+  "**/*.m",
+]
+
