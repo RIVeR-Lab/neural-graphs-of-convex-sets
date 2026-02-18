@@ -14,7 +14,7 @@ if __name__ == "__main__":
         "--seed",
         help="Random seed for generating trajectories",
         type=int,
-        default=1,
+        default=0,
     )
     parser.add_argument(
         "--traj",
@@ -32,7 +32,7 @@ if __name__ == "__main__":
         "--num",
         help="Number of trajectories to generate",
         type=int,
-        default=100,
+        default=1,
     )
     parser.add_argument(
         "--save_relaxed",
@@ -100,7 +100,6 @@ if __name__ == "__main__":
         use_case=use_case,
     )
     solver_params = get_default_solver_params(debug, clarabel=False)
-
     folder_name = create_output_folder(output_dir, slider_type, traj_number)
     plans = get_default_experiment_plans(seed, num_trajs, config)
 
