@@ -402,6 +402,63 @@ class PlanarPushingPath:
 
         return vertex_var_vals
 
+    def _get_initial_guess_for_prog(self, prog: MathematicalProgram) -> npt.NDArray[np.float64]:
+        """
+        Build initial guess in the same order and size as prog.decision_variables(),
+        using the convex restriction result. Handles mismatch between GCS vertex vars
+        (e.g. relaxed_prog) and the assembled nonlinear prog (mode.prog vars).
+        """
+        prog_vars = prog.decision_variables()
+        n = len(prog_vars)
+        initial_guess = np.zeros(n, dtype=np.float64)
+        idx_in_prog = 0
+        for _vertex, mode in self.pairs:
+            mode_vars = mode.prog.decision_variables()
+            for var in mode_vars:
+                if idx_in_prog >= n:
+                    break
+                # Map mode var to GCS vertex var and get value from result
+                gcs_idxs = mode.get_variable_indices_in_gcs_vertex(np.array([var]))
+                if len(gcs_idxs) != 1:
+                    raise RuntimeError(
+                        f"Expected one GCS index per mode var, got {len(gcs_idxs)} for var {var}"
+                    )
+                vertex_var = _vertex.x()[gcs_idxs[0]]
+                val = self.result.GetSolution(vertex_var)
+                initial_guess[idx_in_prog] = float(val) if np.isscalar(val) else float(val.flat[0])
+                idx_in_prog += 1
+        if idx_in_prog != n:
+            raise RuntimeError(
+                f"Initial guess size mismatch: built {idx_in_prog} values but prog has {n} decision variables."
+            )
+        # Apply same rotation scaling as _get_initial_guess_as_orig_variables
+        mock_prog = MathematicalProgram()
+        mock_prog.AddDecisionVariables(prog_vars)
+
+        def _scale_rot_vec(cos: sym.Variable, sin: sym.Variable) -> None:
+            try:
+                idx = mock_prog.FindDecisionVariableIndices(np.array([cos, sin]))
+            except Exception:
+                return
+            if len(idx) != 2:
+                return
+            i0, i1 = int(idx[0]), int(idx[1])
+            rot_vec = initial_guess[[i0, i1]]
+            length = np.linalg.norm(rot_vec)
+            if length > 1e-10:
+                initial_guess[i0] = rot_vec[0] / length
+                initial_guess[i1] = rot_vec[1] / length
+
+        for _vertex, mode in self.pairs:
+            if isinstance(mode, NonCollisionMode):
+                _scale_rot_vec(mode.variables.cos_th, mode.variables.sin_th)
+            elif isinstance(mode, FaceContactMode):
+                for k in range(mode.num_knot_points):
+                    _scale_rot_vec(
+                        mode.variables.cos_ths[k], mode.variables.sin_ths[k]
+                    )
+        return initial_guess
+
     def _do_nonlinear_rounding(
         self,
         solver_params: PlanarSolverParams,
@@ -417,7 +474,11 @@ class PlanarPushingPath:
 
         start = time.time()
 
-        initial_guess = self._get_initial_guess_as_orig_variables()
+        # Rounding stack (create_plans-style):
+        # - This PlanarPushingPath was created from a convex restriction solve on a fixed discrete edge-path.
+        # - We use that convex restriction solution as the initial guess for the nonlinear (SNOPT) rounding solve.
+        # Build initial guess to match prog.decision_variables() exactly (avoids 199 vs 218 size mismatch).
+        initial_guess = self._get_initial_guess_for_prog(prog)
 
         solver_options = SolverOptions()
 
@@ -425,6 +486,7 @@ class PlanarPushingPath:
             # NOTE(bernhardpg): I don't think either SNOPT nor IPOPT supports this setting
             solver_options.SetOption(CommonSolverOption.kPrintToConsole, 1)  # type: ignore
 
+        # Nonlinear rounding solve (SNOPT).
         snopt = SnoptSolver()
         if solver_params.save_solver_output:
             import os

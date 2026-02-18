@@ -155,7 +155,7 @@ def compare_trajs_vertically(
 
     for ax_row in axs:
         for ax in ax_row:
-            ax.axis("equal")  # Ensures the x and y axis are scaled equally
+            ax.set_aspect("auto")
 
             ax.set_xlim(x_min, x_max)
             ax.set_ylim(y_min, y_max)
@@ -369,7 +369,7 @@ def compare_trajs(
             else:
                 ax = axs[segment_idx]
 
-            ax.axis("equal")  # Ensures the x and y axis are scaled equally
+            ax.set_aspect("auto")
 
             ax.set_xlim(x_min, x_max)
             ax.set_ylim(y_min, y_max)
@@ -641,7 +641,7 @@ def plot_simple_traj(
 
         ax = axs[keyframe_idx]
 
-        ax.axis("equal")  # Ensures the x and y axis are scaled equally
+        ax.set_aspect("auto")
 
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
@@ -865,7 +865,7 @@ def make_traj_figure(
         else:
             ax = axs[segment_idx]
 
-        ax.axis("equal")  # Ensures the x and y axis are scaled equally
+        ax.set_aspect("auto")
 
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
@@ -1965,7 +1965,7 @@ def visualize_initial_conditions(
     fig_height = 4
     fig = plt.figure(figsize=(fig_height, fig_height))
     ax = fig.add_subplot(111)
-    ax.axis("equal")  # Ensures the x and y axis are scaled equally
+    ax.set_aspect("auto")
 
     # Hide the axes, including the spines, ticks, labels, and title
     ax.set_axis_off()

@@ -1,5 +1,6 @@
 import os
 import pickle
+import time
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -465,7 +466,52 @@ def create_plan(
     planner = PlanarPushingPlanner(config)
     planner.config.start_and_goal = start_and_target
     planner.formulate_problem()
-    path = planner.plan_path(solver_params)
+
+    # --- Timing breakdown (matched to paper-style reporting) ---
+    # 1) "SDP solve time" = solver-reported time for the convex relaxation solve.
+    relaxed_result = planner._solve(solver_params)
+    planner.relaxed_gcs_result = relaxed_result
+    sdp_solve_time_s = float(relaxed_result.get_solver_details().optimizer_time)  # type: ignore
+
+    # 2) "Rounding time" = SNOPT-only wall-clock solve time for the chosen feasible rounded path.
+    # Note: the overall rounding *pipeline* (sampling paths + convex restrictions + SNOPT across candidates)
+    # can be much larger; we still record it separately for debugging.
+    rounding_pipeline_wall_time_s: float | None = None
+    nonlinear_rounding_time_s: float | None = None
+
+    path = None
+    if do_rounding:
+        t_round_start = time.perf_counter()
+        candidate_paths = planner.get_solution_paths(relaxed_result, solver_params)
+        if candidate_paths is not None:
+            feasible_paths = planner._get_rounded_paths(
+                solver_params, list(candidate_paths)
+            )
+            rounding_pipeline_wall_time_s = time.perf_counter() - t_round_start
+            if feasible_paths is not None:
+                path = planner._pick_best_path(feasible_paths)
+                rt = getattr(path, "rounding_time", None)
+                nonlinear_rounding_time_s = None if rt is None else float(rt)
+        else:
+            rounding_pipeline_wall_time_s = time.perf_counter() - t_round_start
+    else:
+        candidate_paths = planner.get_solution_paths(relaxed_result, solver_params)
+        if candidate_paths is not None:
+            # Pick a binary path (no nonlinear rounding) if requested.
+            path = candidate_paths[0] if hasattr(candidate_paths, "__getitem__") else None
+
+    # Profiling (match plan_with_gnn style: always print SDP, Rounding SNOPT, Rounding pipeline)
+    print(f"[{output_name}] SDP solve time: {sdp_solve_time_s:.3f} s")
+    if nonlinear_rounding_time_s is None:
+        print(f"[{output_name}] Rounding time (SNOPT only): N/A")
+    else:
+        print(f"[{output_name}] Rounding time (SNOPT only): {nonlinear_rounding_time_s:.3f} s")
+    if rounding_pipeline_wall_time_s is not None:
+        print(
+            f"[{output_name}] Rounding pipeline time (sample+restrictions+SNOPT): {rounding_pipeline_wall_time_s:.3f} s"
+        )
+    else:
+        print(f"[{output_name}] Rounding pipeline time (sample+restrictions+SNOPT): N/A")
 
     # We may get infeasible
     if path is not None:
@@ -545,6 +591,21 @@ def create_plan(
         all_edges = list(planner_for_labels.gcs.Edges())
         all_edge_keys = [_edge_key(e) for e in all_edges]
 
+        # Best-effort: grab relaxed (convex-relaxation) flow values for each edge.
+        # These live on the relaxed GCS solve result, not on the rounded path.
+        relaxed_result: MathematicalProgramResult | None = getattr(
+            planner_for_labels, "relaxed_gcs_result", None
+        )
+        phi_vals: list[float | None] = []
+        if relaxed_result is not None:
+            for e in all_edges:
+                try:
+                    phi_vals.append(float(relaxed_result.GetSolution(e.phi())))
+                except Exception:
+                    phi_vals.append(None)
+        else:
+            phi_vals = [None for _ in all_edges]
+
         path_edge_keys: set[tuple[str, str]] = set()
         path_edge_order: dict[tuple[str, str], list[int]] = {}
         path_vertex_names: list[str] = []
@@ -566,6 +627,29 @@ def create_plan(
 
         payload = {
             "chosen_path_kind": chosen_path_kind,  # "feasible" | "binary" | "none"
+            "relaxed_cost": (
+                None
+                if relaxed_result is None
+                else float(relaxed_result.get_optimal_cost())
+            ),
+            "relaxed_solve_time": (
+                None
+                if relaxed_result is None
+                else float(relaxed_result.get_solver_details().optimizer_time)  # type: ignore
+            ),
+            # Paper-style rounding time: SNOPT-only time for the chosen feasible rounded path.
+            "rounding_time": nonlinear_rounding_time_s,
+            # For debugging only: includes path sampling + convex restrictions + SNOPT across candidates.
+            "rounding_pipeline_time": rounding_pipeline_wall_time_s,
+            "path_cost": (
+                None
+                if path is None
+                else (
+                    float(path.rounded_result.get_optimal_cost())
+                    if (path.rounded_result is not None and path.rounded_result.is_success())
+                    else float(path.relaxed_cost)
+                )
+            ),
             "num_vertices": len(list(planner_for_labels.gcs.Vertices())),
             "num_edges": len(all_edges),
             "num_positive_edges": int(sum(y)),
@@ -575,13 +659,14 @@ def create_plan(
                     "u": u,
                     "v": v,
                     "y": int(label),
+                    "phi": (None if phi is None else float(phi)),
                     **(
                         {"order": path_edge_order.get((u, v), [])}
                         if int(label) == 1
                         else {}
                     ),
                 }
-                for (u, v), label in zip(all_edge_keys, y)
+                for ((u, v), label, phi) in zip(all_edge_keys, y, phi_vals)
             ],
         }
         (out_dir / "edges.json").write_text(json.dumps(payload, indent=2))
@@ -599,18 +684,25 @@ def create_plan(
                     attrs.update({"shape": "doublecircle", "color": "darkblue"})
                 dot.add_node(pydot.Node(name, **attrs))
 
-            for (u, v), label in zip(all_edge_keys, y):
+            def _fmt_phi(phi: float | None) -> str:
+                return "?" if phi is None else f"{phi:.3f}"
+
+            for (u, v), label, phi in zip(all_edge_keys, y, phi_vals):
                 if label == 1:
                     order = path_edge_order.get((u, v), [])
                     order_str = ",".join(str(i) for i in order) if len(order) > 0 else "?"
                     edge_attrs = {
                         # Use an HTML-like label so we can color only the traversal index.
-                        "label": f'<<FONT COLOR="black">1</FONT><FONT COLOR="blue"> {order_str}</FONT>>',
+                        "label": f'<<FONT COLOR="black">1</FONT><FONT COLOR="blue"> {order_str}</FONT><FONT COLOR="gray40">, {_fmt_phi(phi)}</FONT>>',
                         "color": "red",
                         "penwidth": "3",
                     }
                 else:
-                    edge_attrs = {"label": "0", "color": "gray70", "penwidth": "1"}
+                    edge_attrs = {
+                        "label": f'<<FONT COLOR="black">0</FONT><FONT COLOR="gray40">, {_fmt_phi(phi)}</FONT>>',
+                        "color": "gray70",
+                        "penwidth": "1",
+                    }
                 dot.add_edge(pydot.Edge(u, v, **edge_attrs))
 
             dot_path = out_dir / "graph_edge_labels.dot"

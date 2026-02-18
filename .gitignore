@@ -2,10 +2,14 @@
 *.mp4*
 *.pkl*
 *.egg-info/
-*.pdf*
+# *.pdf*
 *.pyc*
 *.svg*
 *.dot*
 *.yml*
 *venv*
+*trajectories*
 *.vscode*
+planning_through_contact/dataset/data*
+*wandb*
+checkpoints*
