@@ -475,6 +475,120 @@ class PlanarPushingPlanner:
 
         return paths
 
+    def get_solution_paths_from_flows(
+        self,
+        edge_flows: np.ndarray,
+        solver_params: PlanarSolverParams,
+        *,
+        max_paths: Optional[int] = None,
+        max_steps: int = 512,
+        seed: int = 0,
+    ) -> Optional[List[PlanarPushingPath]]:
+        """
+        Mimics the create_plans.py rounding pipeline, but *replaces* Drake's
+        `GraphOfConvexSets.SamplePaths(..., result, ...)` with sampling directly from provided
+        per-edge flows.
+
+        Pipeline:
+          1) Sample discrete edge-paths using probabilities proportional to `edge_flows`.
+             (This is the flow-guided "path proposal" role played by SamplePaths(result, ...) in create_plans.)
+          2) Solve convex restriction for each sampled path: SolveConvexRestriction(path, ...).
+          3) Wrap as PlanarPushingPath.
+             SNOPT nonlinear rounding is done later via `_get_rounded_paths` -> `PlanarPushingPath.do_rounding`.
+
+        `edge_flows` must be aligned with `list(self.gcs.Edges())` (same order).
+        """
+        assert self.source is not None
+        assert self.target is not None
+
+        all_edges = list(self.gcs.Edges())
+        edge_flows = np.asarray(edge_flows, dtype=np.float64).reshape((-1,))
+        if edge_flows.shape[0] != len(all_edges):
+            raise ValueError(
+                f"edge_flows has length {edge_flows.shape[0]} but graph has {len(all_edges)} edges."
+            )
+
+        options = opt.GraphOfConvexSetsOptions()
+        options.convex_relaxation = True
+        options.preprocessing = True
+        options.solver_options = self._get_mosek_params(solver_params, 1e-5)
+
+        n_paths = int(solver_params.rounding_steps if max_paths is None else max_paths)
+        rng = np.random.default_rng(int(seed))
+
+        # Build outgoing adjacency for sampling.
+        outgoing: Dict[str, List[int]] = {}
+        for idx, e in enumerate(all_edges):
+            outgoing.setdefault(e.u().name(), []).append(idx)
+
+        def _sample_one() -> Optional[List[GcsEdge]]:
+            cur = self.source.vertex.name()
+            target = self.target.vertex.name()
+            path_edge_indices: List[int] = []
+            for _ in range(int(max_steps)):
+                if cur == target:
+                    break
+                cand = outgoing.get(cur, [])
+                if len(cand) == 0:
+                    return None
+                w = np.maximum(edge_flows[cand], 0.0)
+                s = float(np.sum(w))
+                if s <= 0:
+                    return None
+                # Flow-guided transition probabilities:
+                #   p(e | v) = ϕ_e / Σ_{e' ∈ out(v)} ϕ_{e'}
+                # implemented as: w = max(ϕ, 0), then p = w / sum(w)
+                p = w / s
+                choice = int(rng.choice(len(cand), p=p))
+                eidx = int(cand[choice])
+                path_edge_indices.append(eidx)
+                cur = all_edges[eidx].v().name()
+            if cur != target:
+                return None
+            return [all_edges[i] for i in path_edge_indices]
+
+        sampled_paths: List[List[GcsEdge]] = []
+        seen: set[tuple[str, ...]] = set()
+        trials = 0
+        max_trials = int(solver_params.max_rounding_trials)
+        while len(sampled_paths) < n_paths and trials < max_trials:
+            trials += 1
+            ep = _sample_one()
+            if ep is None or len(ep) == 0:
+                continue
+            key = tuple(f"{e.u().name()}->{e.v().name()}" for e in ep)
+            if key in seen:
+                continue
+            seen.add(key)
+            sampled_paths.append(ep)
+
+        if len(sampled_paths) == 0:
+            return None
+
+        # Convex restriction solve for each sampled discrete path.
+        results = [self.gcs.SolveConvexRestriction(path, options) for path in sampled_paths]
+        only_successful = [
+            (path, res) for path, res in zip(sampled_paths, results) if res.is_success()
+        ]
+        if len(only_successful) == 0:
+            return None
+
+        sorted_res = sorted(only_successful, key=lambda pair: pair[1].get_optimal_cost())
+        sampled_paths, results = zip(*sorted_res)
+
+        all_pairs = self._get_all_vertex_mode_pairs()
+        paths = [
+            PlanarPushingPath.from_path(
+                self.gcs,
+                result,
+                path,
+                all_pairs,
+                assert_nan_values=solver_params.assert_nan_values,
+            )
+            for path, result in zip(sampled_paths, results)
+        ]
+        return list(paths)
+
     def _plan_paths(
         self, solver_params: PlanarSolverParams
     ) -> Optional[List[PlanarPushingPath]]:

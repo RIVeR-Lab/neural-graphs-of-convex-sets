@@ -103,7 +103,7 @@ def main() -> None:
         "--h5_path",
         type=str,
         default=None,
-        help="Output HDF5 path. Defaults to planning_through_contact/dataset/data/solutions_<timestamp>.h5",
+        help="Output HDF5 path. Defaults to planning_through_contact/dataset/data/gcs_solutions.h5",
     )
     parser.add_argument(
         "--debug",
@@ -127,11 +127,10 @@ def main() -> None:
             "Missing dependency `h5py`. Install it (e.g. `pip install h5py`) and retry."
         ) from e
 
-    now = datetime.now().strftime("%Y%m%d%H%M%S")
     h5_path = (
         Path(args.h5_path)
         if args.h5_path is not None
-        else Path("planning_through_contact/dataset/data") / f"solutions_{now}.h5"
+        else Path("planning_through_contact/dataset/data") / "gcs_solutions.h5"
     )
     h5_path.parent.mkdir(parents=True, exist_ok=True)
 

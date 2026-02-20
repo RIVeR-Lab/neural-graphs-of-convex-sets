@@ -11,3 +11,5 @@
 *trajectories*
 *.vscode*
 planning_through_contact/dataset/data*
+*wandb*
+checkpoints*

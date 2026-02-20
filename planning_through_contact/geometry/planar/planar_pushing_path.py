@@ -417,6 +417,9 @@ class PlanarPushingPath:
 
         start = time.time()
 
+        # Rounding stack (create_plans-style):
+        # - This PlanarPushingPath was created from a convex restriction solve on a fixed discrete edge-path.
+        # - We use that convex restriction solution as the initial guess for the nonlinear (SNOPT) rounding solve.
         initial_guess = self._get_initial_guess_as_orig_variables()
 
         solver_options = SolverOptions()
@@ -425,6 +428,7 @@ class PlanarPushingPath:
             # NOTE(bernhardpg): I don't think either SNOPT nor IPOPT supports this setting
             solver_options.SetOption(CommonSolverOption.kPrintToConsole, 1)  # type: ignore
 
+        # Nonlinear rounding solve (SNOPT).
         snopt = SnoptSolver()
         if solver_params.save_solver_output:
             import os

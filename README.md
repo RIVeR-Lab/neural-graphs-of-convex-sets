@@ -1,15 +1,14 @@
 # neural-graphs-of-convex-sets
 
 ## Setup
-
-From the repo root:
-
 ```console
 python3.12 -m venv venv
 source venv/bin/activate
 python3 -m pip install -U pip
+pip install torch==2.5.0 --index-url https://download.pytorch.org/whl/cu121
 python3 -m pip install -r requirements.txt
 python3 -m pip install -e . --no-deps
+pip install torch-scatter -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__.split('+')[0])")+cu121.html
 ```
 
 ## Run Planning Through Contact Via Nominal GCS
