@@ -286,6 +286,12 @@ def main() -> None:
         help="CSV with plan_id, split, poses. Used when --use_test_plans.",
     )
     parser.add_argument(
+        "--max_test_plans",
+        type=int,
+        default=None,
+        help="Optional cap on number of test plans processed (in CSV order).",
+    )
+    parser.add_argument(
         "--h5_path",
         type=str,
         default=None,
@@ -316,9 +322,30 @@ def main() -> None:
         help="Save motion videos: prediction.mp4 (GNN+rounding) and, with --use_test_plans and h5_path, ground_truth.mp4 (SDP+rounding).",
     )
     parser.add_argument("--no_save_video", action="store_true", help="Disable saving motion videos (overrides --save_video).")
+    parser.add_argument(
+        "--show_contact_legend",
+        action="store_true",
+        default=True,
+        help="Show top-left legend for pusher contact state in videos.",
+    )
+    parser.add_argument(
+        "--no_contact_legend",
+        action="store_true",
+        help="Hide pusher contact state legend in videos.",
+    )
+    parser.add_argument("--video_width_px", type=int, default=1920, help="Output video width in pixels.")
+    parser.add_argument("--video_height_px", type=int, default=1080, help="Output video height in pixels.")
+    parser.add_argument(
+        "--video_dpi",
+        type=int,
+        default=100,
+        help="Video export DPI used with figure size to match pixel dimensions.",
+    )
     args = parser.parse_args()
     if args.no_save_video:
         args.save_video = False
+    if args.no_contact_legend:
+        args.show_contact_legend = False
 
     if not args.debug:
         import logging
@@ -332,6 +359,8 @@ def main() -> None:
             raise FileNotFoundError(f"Plan index CSV not found: {plan_index_csv}")
         test_plans_with_ids, body = load_test_plans_from_csv(plan_index_csv)
         plans_with_ids = [(pid, p) for pid, p in test_plans_with_ids]
+        if args.max_test_plans is not None:
+            plans_with_ids = plans_with_ids[: max(0, int(args.max_test_plans))]
         body_for_run = body
         if not plans_with_ids:
             raise SystemExit("No test plans found in CSV (split=='test'). Check plan_index_csv and split column.")
@@ -539,6 +568,10 @@ def main() -> None:
                     filename=str(traj_dir / "prediction"),
                     visualize_knot_points=True,
                     lims=animation_lims,
+                    show_contact_legend=args.show_contact_legend,
+                    video_width_px=args.video_width_px,
+                    video_height_px=args.video_height_px,
+                    video_dpi=args.video_dpi,
                 )
                 # Ground-truth video: run nominal GCS (SDP + rounding) for this plan so you can compare motion
                 if args.use_test_plans and h5_path is not None and plan_id is not None and h5_path.exists():
@@ -558,6 +591,10 @@ def main() -> None:
                             filename=str(traj_dir / "ground_truth"),
                             visualize_knot_points=True,
                             lims=animation_lims,
+                            show_contact_legend=args.show_contact_legend,
+                            video_width_px=args.video_width_px,
+                            video_height_px=args.video_height_px,
+                            video_dpi=args.video_dpi,
                         )
 
 

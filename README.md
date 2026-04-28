@@ -57,3 +57,11 @@ python3 planning_through_contact/dataset/collect_solutions.py
 After a test run, check graph visualizations in the output directory: **`prediction.svg`** (GNN + rounding pipeline) and **`ground_truth.svg`** (SDP ground truth from H5, when using test plans).
 
 Motion videos are saved by default under **`trajectory/`**: **`prediction.mp4`** (GNN + rounding) and **`ground_truth.mp4`** (SDP + rounding, when using test plans and H5). Both use the same camera view so you can compare motion directly.
+
+Recorded videos now include a top-left legend for pusher contact state (red = non-contact, green = contact) and default to **1920x1080** output.
+
+To run exactly 4 held-out test instances with this visualization and save videos:
+
+```console
+./planning_through_contact/scripts/planar_pushing/test_4_instances_record_videos.sh
+```

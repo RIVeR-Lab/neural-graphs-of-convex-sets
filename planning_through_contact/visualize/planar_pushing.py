@@ -5,6 +5,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+from matplotlib.lines import Line2D
 from pydrake.common.value import Value
 from pydrake.geometry import Box as DrakeBox
 from pydrake.geometry import Convex
@@ -39,6 +40,7 @@ from planning_through_contact.geometry.planar.planar_pose import PlanarPose
 from planning_through_contact.geometry.planar.planar_pushing_trajectory import (
     FaceContactTrajSegment,
     NonCollisionTrajSegment,
+    PlanarPushingContactMode,
     PlanarPushingTrajectory,
     SimplePlanarPushingTrajectory,
 )
@@ -1317,6 +1319,7 @@ def _add_pusher_geometry(
     scene_graph: SceneGraph,
     pusher_frame_id: FrameId,
     alpha: float = 1.0,
+    color: RGB = COLORS["firebrick3"],
 ) -> None:
     CYLINDER_HEIGHT = 0.3
     pusher_geometry_id = scene_graph.RegisterGeometry(
@@ -1330,11 +1333,10 @@ def _add_pusher_geometry(
             "pusher",
         ),
     )
-    pusher_COLOR = COLORS["firebrick3"]
     scene_graph.AssignRole(
         source_id,
         pusher_geometry_id,
-        MakePhongIllustrationProperties(pusher_COLOR.diffuse(alpha)),
+        MakePhongIllustrationProperties(color.diffuse(alpha)),
     )
 
 
@@ -1576,11 +1578,24 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
         )
 
         self.pusher_frame_id = scene_graph.RegisterFrame(
-            self.source_id,
-            GeometryFrame("pusher"),
+            self.source_id, GeometryFrame("pusher_non_contact")
         )
         _add_pusher_geometry(
-            self.source_id, pusher_radius, scene_graph, self.pusher_frame_id
+            self.source_id,
+            pusher_radius,
+            scene_graph,
+            self.pusher_frame_id,
+            color=CRIMSON,
+        )
+        self.pusher_contact_frame_id = scene_graph.RegisterFrame(
+            self.source_id, GeometryFrame("pusher_contact")
+        )
+        _add_pusher_geometry(
+            self.source_id,
+            pusher_radius,
+            scene_graph,
+            self.pusher_contact_frame_id,
+            color=EMERALDGREEN,
         )
 
         GOAL_TRANSPARENCY = 0.3
@@ -1653,10 +1668,8 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
     def _set_outputs(
         self,
         slider_frame_id: FrameId,
-        pusher_frame_id: FrameId,
         output: FramePoseVector,
         p_WB: npt.NDArray[np.float64],
-        p_WP: npt.NDArray[np.float64],
         R_WB: npt.NDArray[np.float64],
     ):
         p_x = p_WB[0, 0]  # type: ignore
@@ -1667,10 +1680,30 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
         )
         output.get_mutable_value().set_value(id=slider_frame_id, value=slider_pose)  # type: ignore
 
-        pusher_pose = RigidTransform(
-            RotationMatrix.Identity(), np.concatenate((p_WP.flatten(), [0]))  # type: ignore
+    def _set_pusher_outputs(
+        self,
+        pusher_non_contact_frame_id: FrameId,
+        pusher_contact_frame_id: FrameId,
+        output: FramePoseVector,
+        p_WP: npt.NDArray[np.float64],
+        in_contact: bool,
+    ) -> None:
+        pusher_non_contact_pos = p_WP if not in_contact else np.array([[99.0], [99.0]])
+        pusher_contact_pos = p_WP if in_contact else np.array([[99.0], [99.0]])
+        pusher_non_contact_pose = RigidTransform(
+            RotationMatrix.Identity(),
+            np.concatenate((pusher_non_contact_pos.flatten(), [0])),  # type: ignore
         )
-        output.get_mutable_value().set_value(id=pusher_frame_id, value=pusher_pose)  # type: ignore
+        pusher_contact_pose = RigidTransform(
+            RotationMatrix.Identity(),
+            np.concatenate((pusher_contact_pos.flatten(), [0])),  # type: ignore
+        )
+        output.get_mutable_value().set_value(
+            id=pusher_non_contact_frame_id, value=pusher_non_contact_pose
+        )  # type: ignore
+        output.get_mutable_value().set_value(
+            id=pusher_contact_frame_id, value=pusher_contact_pose
+        )  # type: ignore
 
     def calc_output(self, context: Context, output: FramePoseVector) -> None:
         t = context.get_time()
@@ -1688,11 +1721,17 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
 
         self._set_outputs(
             self.slider_frame_id,
-            self.pusher_frame_id,
             output,
             p_WB,  # type: ignore
-            p_WP,  # type: ignore
             R_WB,  # type: ignore
+        )
+        in_contact = self.traj.get_mode(t) != PlanarPushingContactMode.NO_CONTACT
+        self._set_pusher_outputs(
+            self.pusher_frame_id,
+            self.pusher_contact_frame_id,
+            output,
+            p_WP,  # type: ignore
+            in_contact,
         )
 
         if self.visualize_goal:
@@ -1706,12 +1745,17 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
 
             self._set_outputs(
                 self.slider_goal_frame_id,
-                self.pusher_goal_frame_id,
                 output,
                 target_slider_planar_pose.pos(),
-                target_pusher_pos,
                 target_slider_planar_pose.rot_matrix(),
             )
+            pusher_goal_pose = RigidTransform(
+                RotationMatrix.Identity(),
+                np.concatenate((target_pusher_pos.flatten(), [0])),  # type: ignore
+            )
+            output.get_mutable_value().set_value(
+                id=self.pusher_goal_frame_id, value=pusher_goal_pose
+            )  # type: ignore
 
 
 def visualize_planar_pushing_start_and_goal(
@@ -1789,6 +1833,11 @@ def visualize_planar_pushing_trajectory(
     filename: Optional[str] = None,
     visualize_knot_points: bool = False,
     lims: Optional[Tuple[float, float, float, float]] = None,
+    show_contact_legend: bool = True,
+    video_width_px: int = 1920,
+    video_height_px: int = 1080,
+    video_dpi: int = 100,
+    overlay_scale: float = 2.0,
 ):
     if save:
         assert filename is not None
@@ -1825,7 +1874,50 @@ def visualize_planar_pushing_trajectory(
         )
         return visualizer
 
+    base_time_fontsize = plt.rcParams.get("axes.titlesize", 12.0)
+    try:
+        time_fontsize = float(base_time_fontsize) * float(overlay_scale)
+    except (TypeError, ValueError):
+        time_fontsize = 24.0
+    plt.rcParams["axes.titlesize"] = time_fontsize
+
     visualizer = connect_planar_visualizer(builder, scene_graph)
+    visualizer.fig.set_dpi(video_dpi)
+    visualizer.fig.set_size_inches(
+        video_width_px / video_dpi, video_height_px / video_dpi, forward=True
+    )
+
+    if show_contact_legend:
+        legend_marker_size = 8 * float(overlay_scale)
+        legend_font_size = 10 * float(overlay_scale)
+        legend_handles = [
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markerfacecolor=CRIMSON.diffuse(),
+                markeredgecolor=BLACK.diffuse(),
+                markersize=legend_marker_size,
+                label="Pusher (non-contact)",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markerfacecolor=EMERALDGREEN.diffuse(),
+                markeredgecolor=BLACK.diffuse(),
+                markersize=legend_marker_size,
+                label="Pusher (contact)",
+            ),
+        ]
+        visualizer.ax.legend(
+            handles=legend_handles,
+            loc="upper left",
+            framealpha=0.9,
+            fontsize=legend_font_size,
+        )
 
     diagram = builder.Build()
     diagram.set_name("diagram")
@@ -1845,7 +1937,8 @@ def visualize_planar_pushing_trajectory(
 
     if save:
         # Playback the recording and save the output.
-        ani.save(f"{filename}.mp4", fps=30)
+        ani.save(f"{filename}.mp4", fps=30, dpi=video_dpi)
+    plt.rcParams["axes.titlesize"] = base_time_fontsize
 
     return ani
 
