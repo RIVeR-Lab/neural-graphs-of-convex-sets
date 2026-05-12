@@ -1,0 +1,44 @@
+directives:
+- add_model:
+    name: iiwa
+    file: package://drake_models/iiwa_description/sdf/iiwa7_no_collision.sdf
+    default_joint_positions:
+        iiwa_joint_1: [-0.2136]
+        iiwa_joint_2: [0.7554]
+        iiwa_joint_3: [0.2475]
+        iiwa_joint_4: [-2.0659]
+        iiwa_joint_5: [2.6645]
+        iiwa_joint_6: [-0.3753]
+        iiwa_joint_7: [0.4168]
+
+- add_weld:
+    parent: world
+    child: iiwa::iiwa_link_0
+    X_PC:
+        rotation: !Rpy { deg: [0.0, 0.0, 0.0]}
+        # Matches table at x=-0.15 with arm welded at [-0.38, -0.15, 0.02] on TableTop.
+        translation: [-0.53, -0.15, 0.02]
+
+- add_model:
+    name: pusher
+    file: package://planning_through_contact/pusher_floating_hydroelastic.sdf
+
+# Weld the pusher body directly to the iiwa end-effector link. Newer Drake
+# requires the model directives to form a tree, so we can no longer create a
+# frame on the pusher and weld the iiwa to it (that gives the frame two
+# parents). Instead we weld iiwa_link_7 -> pusher with the equivalent offset:
+# the pusher origin sits +0.075 above iiwa_link_7 (half the pusher length).
+- add_weld:
+    parent: iiwa::iiwa_link_7
+    child: pusher::pusher
+    X_PC:
+        rotation: !Rpy { deg: [0.0, 0.0, 0.0]}
+        translation: [0.0, 0.0, 0.075]
+
+- add_frame:
+    name: pusher_end
+    X_PF:
+        base_frame: pusher::pusher
+        rotation: !Rpy { deg: [0.0, 0.0, 0.0]}
+        # tip of the pusher: +0.075 from the pusher origin
+        translation: [0.0, 0.0, 0.075]
