@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <model name="sugar_box">
+    <!-- Matches planning Box2d(width=0.106, height=0.185). Origin at box center. -->
+    <link name="sugar_box">
+      <inertial>
+        <mass>0.1</mass>
+        <inertia>
+          <ixx>3.2e-4</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.0e-4</iyy>
+          <iyz>0</iyz>
+          <izz>4.2e-4</izz>
+        </inertia>
+      </inertial>
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.106 0.185 0.05</size>
+          </box>
+        </geometry>
+        <material>
+          <diffuse>0.26953125 0.54296875 0.453125 1.</diffuse>
+        </material>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.106 0.185 0.05</size>
+          </box>
+        </geometry>
+        <drake:proximity_properties>
+          <drake:compliant_hydroelastic/>
+          <drake:hunt_crossley_dissipation>1.25</drake:hunt_crossley_dissipation>
+          <drake:hydroelastic_modulus>1e5</drake:hydroelastic_modulus>
+          <drake:mesh_resolution_hint>0.005</drake:mesh_resolution_hint>
+          <drake:mu_dynamic>0.5</drake:mu_dynamic>
+          <drake:mu_static>0.5</drake:mu_static>
+        </drake:proximity_properties>
+      </collision>
+    </link>
+  </model>
+</sdf>
