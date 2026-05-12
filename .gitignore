@@ -1,0 +1,23 @@
+*.json*
+*.mp4*
+*.pkl*
+*.egg-info/
+*.pdf*
+*.pyc*
+*.svg*
+*.dot*
+*.yml*
+*venv*
+*trajectories*
+*.vscode*
+planning_through_contact/dataset/data*
+*wandb*
+checkpoints*
+# *.pdf
+*events.out.tfevents*
+runs/
+benchmark_results
+*claude
+quadrotor_demo.html
+quadrotor/models/room_gen/building.sdf
+viz
