@@ -4,9 +4,14 @@ import argparse
 from pathlib import Path
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
+from planning_through_contact.model.checkpoint_utils import (
+    dataset_paths_for_body,
+    flow_checkpoint_name,
+    validate_body,
+)
 from planning_through_contact.model.cuda_required import require_cuda
 from planning_through_contact.model.datamodule import DatasetPaths, GCSDataModule
 from planning_through_contact.model.hparams import DecoderHParams, EncoderHParams, TrainingHParams
@@ -16,16 +21,18 @@ from planning_through_contact.model.lightning_module import GCSLightningModule
 def main() -> None:
     require_cuda()
     parser = argparse.ArgumentParser()
+    parser.add_argument("--body", type=str, default="sugar_box", choices=["sugar_box", "tee"])
+    parser.add_argument("--data_root", type=str, default="planning_through_contact/dataset/data")
     parser.add_argument(
         "--h5_path",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/gcs_solutions.h5",
+        default=None,
         help="Path to solutions HDF5.",
     )
     parser.add_argument(
         "--node_features_csv",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/node_features.csv",
+        default=None,
         help="Static node features CSV.",
     )
     parser.add_argument("--x_dim", type=int, default=None, help="Override node feature dimension.")
@@ -49,6 +56,12 @@ def main() -> None:
     parser.add_argument("--decoder_dropout_p", type=float, default=0.1)
 
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument(
+        "--max_train_samples",
+        type=int,
+        default=None,
+        help="If set, use only the first N training instances (after sorting by plan_id).",
+    )
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
@@ -63,6 +76,12 @@ def main() -> None:
     parser.add_argument("--log_dir", type=str, default="runs", help="TensorBoard log directory.")
     parser.add_argument("--experiment", type=str, default="gcs_gnn")
     parser.add_argument("--ckpt_dir", type=str, default="checkpoints", help="Where to save .ckpt files.")
+    parser.add_argument(
+        "--ckpt_filename",
+        type=str,
+        default=None,
+        help="Base name for ModelCheckpoint (best val/loss saved as {name}.ckpt when version counter disabled).",
+    )
 
     parser.add_argument("--no_wandb", action="store_true", help="Disable Weights & Biases; use TensorBoard instead.")
     parser.add_argument("--wandb_project", type=str, default="gnn-for-gcs")
@@ -75,13 +94,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    paths = DatasetPaths(h5_path=Path(args.h5_path), node_features_csv=Path(args.node_features_csv))
+    body = validate_body(str(args.body))
+    body_paths = dataset_paths_for_body(body, data_root=args.data_root)
+    h5_path = Path(args.h5_path) if args.h5_path is not None else body_paths.h5_path
+    node_features_csv = (
+        Path(args.node_features_csv)
+        if args.node_features_csv is not None
+        else body_paths.node_features_csv
+    )
+    ckpt_filename = str(args.ckpt_filename) if args.ckpt_filename is not None else flow_checkpoint_name(body)
+
+    paths = DatasetPaths(h5_path=h5_path, node_features_csv=node_features_csv)
     dm = GCSDataModule(
         paths=paths,
         batch_size=int(args.batch_size),
         num_workers=int(args.num_workers),
         include_source_target=True,
         target=args.target,
+        max_train_samples=args.max_train_samples,
     )
     dm.setup("fit")
 
@@ -141,6 +171,7 @@ def main() -> None:
         logger.log_hyperparams(
             {
                 "target": args.target,
+                "body": body,
                 "x_dim": x_dim,
                 "g_dim": g_dim,
                 "pos_weight": float(dm.pos_weight.item()),
@@ -148,8 +179,9 @@ def main() -> None:
                 "decoder": decoder_hp.__dict__,
                 "train": train_hp.__dict__,
                 "data": {
-                    "h5_path": str(args.h5_path),
-                    "node_features_csv": str(args.node_features_csv),
+                    "h5_path": str(h5_path),
+                    "node_features_csv": str(node_features_csv),
+                    "max_train_samples": args.max_train_samples,
                 },
             }
         )
@@ -158,14 +190,15 @@ def main() -> None:
 
     ckpt = ModelCheckpoint(
         dirpath=str(Path(args.ckpt_dir) / args.experiment),
-        filename="box_pushing",
+        filename=ckpt_filename,
         monitor="val/loss",
         mode="min",
         save_top_k=1,
-        save_last=True,
+        save_last=f"{ckpt_filename}_last",
         every_n_epochs=1,
+        enable_version_counter=False,
     )
-    callbacks = [ckpt]
+    callbacks = [ckpt, LearningRateMonitor(logging_interval="epoch")]
     if train_hp.use_early_stopping:
         early_stop = EarlyStopping(
             monitor="val/loss",

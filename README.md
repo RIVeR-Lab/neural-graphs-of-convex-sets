@@ -1,4 +1,13 @@
-# neural-graphs-of-convex-sets
+# Neural Graphs of Convex Sets
+This repository contains the code associated to our paper [Neural Graphs of Convex Sets: Towards Real-Time Long-Horizon Discrete and Continuous Motion Planning](https://neural-gcs.github.io/).
+
+**TL;DR:** We accelerate motion planning in Graphs of Convex Sets by replacing the convex relaxation stage with a Graph Neural Network that predicts edge flows, from which we sample candidate paths. A RankNet-style ranker identifies the top candidate paths, and we round only those paths. We demonstrate the proposed approach on obstacle-free quadrotor motion planning and planning through contact, pushing both toward real-time rates exceeding ~50Hz.
+
+
+## Acknowledgments
+
+We are grateful to the authors of [Motion Planning around Obstacles with Convex Optimization](https://arxiv.org/abs/2205.04422) and [Towards Tight Convex Relaxations for Contact-Rich Manipulation](https://arxiv.org/abs/2402.10312) for making their codebases public. This project builds on their work.
+
 
 ## Setup
 ```console
@@ -10,6 +19,10 @@ python3 -m pip install -r requirements.txt
 python3 -m pip install -e . --no-deps
 pip install torch-scatter -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__.split('+')[0])")+cu121.html
 ```
+
+Note: These commands were tested with CUDA 12.1 (`cu121`). If your machine uses a different CUDA version, adjust the PyTorch index URL and PyG wheel URL accordingly.
+
+The quadrotor/GCS examples use Drake's GCS bindings. Some vanilla GCS solves may use MOSEK through Drake, so install and license MOSEK if you want to reproduce those solver paths exactly.
 
 ## Run Planning Through Contact Via Nominal GCS
 Validate the setup by ensuring a plan through contact can be successfully generated
@@ -54,7 +67,7 @@ Download the box-pushing dataset and trained checkpoint before running GNN infer
 ./planning_through_contact/scripts/planar_pushing/train.sh
 ```
 
-**Test** (inference / planning with the trained model):
+**Test** (GNN inference vs vanilla GCS on the held-out test split; uses `checkpoints/gcs_gnn/reduced_data.ckpt` if present, otherwise `box_pushing.ckpt`):
 
 ```console
 ./planning_through_contact/scripts/planar_pushing/test.sh

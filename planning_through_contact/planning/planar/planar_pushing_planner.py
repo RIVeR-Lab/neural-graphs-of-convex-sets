@@ -457,6 +457,9 @@ class PlanarPushingPlanner:
             results.append(res)
             entry = {
                 "path_index": i,
+                "path_edge_u": [e.u().name() for e in path],
+                "path_edge_v": [e.v().name() for e in path],
+                "path_edge_order": list(range(1, len(path) + 1)),
                 "convex_restriction_s": solve_time_s,
                 "convex_restriction_success": res.is_success(),
                 "relaxed_cost": float(res.get_optimal_cost()) if res.is_success() else None,
@@ -536,17 +539,44 @@ class PlanarPushingPlanner:
         assert self.source is not None
         assert self.target is not None
 
+        sampled_paths = self.sample_edge_paths_from_flows(
+            edge_flows=edge_flows,
+            solver_params=solver_params,
+            max_paths=max_paths,
+            max_steps=max_steps,
+            seed=seed,
+            profile=profile,
+        )
+        if len(sampled_paths) == 0:
+            if profile is not None:
+                profile["paths"] = []
+            return None
+
+        return self.solve_convex_restrictions_for_edge_paths(
+            sampled_paths,
+            solver_params=solver_params,
+            profile=profile,
+        )
+
+    def sample_edge_paths_from_flows(
+        self,
+        *,
+        edge_flows: np.ndarray,
+        solver_params: PlanarSolverParams,
+        max_paths: Optional[int] = None,
+        max_steps: int = 512,
+        seed: int = 0,
+        profile: Optional[dict[str, Any]] = None,
+    ) -> List[List[GcsEdge]]:
+        assert self.source is not None
+        assert self.target is not None
+
         all_edges = list(self.gcs.Edges())
         edge_flows = np.asarray(edge_flows, dtype=np.float64).reshape((-1,))
         if edge_flows.shape[0] != len(all_edges):
             raise ValueError(
                 f"edge_flows has length {edge_flows.shape[0]} but graph has {len(all_edges)} edges."
             )
-
-        options = opt.GraphOfConvexSetsOptions()
-        options.convex_relaxation = True
-        options.preprocessing = True
-        options.solver_options = self._get_mosek_params(solver_params, 1e-5)
 
         n_paths = int(solver_params.rounding_steps if max_paths is None else max_paths)
         rng = np.random.default_rng(int(seed))
@@ -601,20 +631,32 @@ class PlanarPushingPlanner:
             profile["path_sampling_s"] = time.perf_counter() - t_sample
             profile["num_unique_paths"] = len(sampled_paths)
 
-        if len(sampled_paths) == 0:
-            if profile is not None:
-                profile["paths"] = []
-            return None
+        return sampled_paths
+
+    def solve_convex_restrictions_for_edge_paths(
+        self,
+        edge_paths: List[List[GcsEdge]],
+        *,
+        solver_params: PlanarSolverParams,
+        profile: Optional[dict[str, Any]] = None,
+    ) -> Optional[List[PlanarPushingPath]]:
+        options = opt.GraphOfConvexSetsOptions()
+        options.convex_relaxation = True
+        options.preprocessing = True
+        options.solver_options = self._get_mosek_params(solver_params, 1e-5)
 
         entries: list[dict[str, Any]] = []
         results = []
-        for i, path in enumerate(sampled_paths):
+        for i, path in enumerate(edge_paths):
             t_solve = time.perf_counter()
             res = self.gcs.SolveConvexRestriction(path, options)
             solve_time_s = time.perf_counter() - t_solve
             results.append(res)
             entry = {
                 "path_index": i,
+                "path_edge_u": [e.u().name() for e in path],
+                "path_edge_v": [e.v().name() for e in path],
+                "path_edge_order": list(range(1, len(path) + 1)),
                 "convex_restriction_s": solve_time_s,
                 "convex_restriction_success": res.is_success(),
                 "relaxed_cost": float(res.get_optimal_cost()) if res.is_success() else None,
@@ -629,7 +671,7 @@ class PlanarPushingPlanner:
             entries.append(entry)
         only_successful = [
             (path, res, entry)
-            for path, res, entry in zip(sampled_paths, results, entries)
+            for path, res, entry in zip(edge_paths, results, entries)
             if res.is_success()
         ]
         if len(only_successful) == 0:
@@ -638,7 +680,7 @@ class PlanarPushingPlanner:
             return None
 
         sorted_res = sorted(only_successful, key=lambda pair: pair[1].get_optimal_cost())
-        sampled_paths, results, sorted_entries = zip(*sorted_res)
+        edge_paths, results, sorted_entries = zip(*sorted_res)
         if profile is not None:
             failed_entries = [entry for entry in entries if not entry["convex_restriction_success"]]
             profile["paths"] = list(sorted_entries) + failed_entries
@@ -652,12 +694,83 @@ class PlanarPushingPlanner:
                 all_pairs,
                 assert_nan_values=solver_params.assert_nan_values,
             )
-            for path, result in zip(sampled_paths, results)
+            for path, result in zip(edge_paths, results)
         ]
         if profile is not None:
             for path, entry in zip(paths, profile.get("paths", [])):
                 entry["path_object_id"] = id(path)
         return list(paths)
+
+    def solve_ranked_edge_paths_until_feasible(
+        self,
+        edge_paths: List[List[GcsEdge]],
+        ranked_indices: List[int],
+        *,
+        solver_params: PlanarSolverParams,
+        profile: Optional[dict[str, Any]] = None,
+    ) -> Optional[PlanarPushingPath]:
+        options = opt.GraphOfConvexSetsOptions()
+        options.convex_relaxation = True
+        options.preprocessing = True
+        options.solver_options = self._get_mosek_params(solver_params, 1e-5)
+        all_pairs = self._get_all_vertex_mode_pairs()
+        entries: list[dict[str, Any]] = []
+
+        for attempt_rank, path_idx in enumerate(ranked_indices):
+            path = edge_paths[int(path_idx)]
+            t_solve = time.perf_counter()
+            res = self.gcs.SolveConvexRestriction(path, options)
+            restriction_s = time.perf_counter() - t_solve
+            entry = {
+                "rank": int(attempt_rank),
+                "path_index": int(path_idx),
+                "path_edge_u": [e.u().name() for e in path],
+                "path_edge_v": [e.v().name() for e in path],
+                "convex_restriction_s": restriction_s,
+                "convex_restriction_success": res.is_success(),
+                "relaxed_cost": float(res.get_optimal_cost()) if res.is_success() else None,
+                "rounding_success": False,
+                "rounding_s": None,
+                "rounded_cost": None,
+            }
+            try:
+                entry["convex_restriction_solver_s"] = float(res.get_solver_details().optimizer_time)  # type: ignore
+            except Exception:
+                entry["convex_restriction_solver_s"] = None
+
+            if res.is_success():
+                candidate = PlanarPushingPath.from_path(
+                    self.gcs,
+                    res,
+                    path,
+                    all_pairs,
+                    assert_nan_values=solver_params.assert_nan_values,
+                )
+                t_round = time.perf_counter()
+                candidate.do_rounding(solver_params)
+                entry["rounding_s"] = getattr(candidate, "rounding_time", time.perf_counter() - t_round)
+                entry["rounding_success"] = (
+                    candidate.rounded_result is not None and candidate.rounded_result.is_success()
+                )
+                entry["rounded_cost"] = (
+                    float(candidate.rounded_result.get_optimal_cost())
+                    if entry["rounding_success"]
+                    else None
+                )
+                if entry["rounding_success"]:
+                    entry["path_object_id"] = id(candidate)
+                    entries.append(entry)
+                    if profile is not None:
+                        profile["paths"] = entries
+                        profile["num_ranked_paths_tried"] = len(entries)
+                    return candidate
+
+            entries.append(entry)
+
+        if profile is not None:
+            profile["paths"] = entries
+            profile["num_ranked_paths_tried"] = len(entries)
+        return None
 
     def _plan_paths(
         self, solver_params: PlanarSolverParams

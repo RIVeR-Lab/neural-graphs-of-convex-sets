@@ -2,7 +2,7 @@
 *.mp4*
 *.pkl*
 *.egg-info/
-# *.pdf*
+*.pdf*
 *.pyc*
 *.svg*
 *.dot*
@@ -13,3 +13,7 @@
 planning_through_contact/dataset/data*
 *wandb*
 checkpoints*
+*.pdf
+*events.out.tfevents*
+runs/
+benchmark*

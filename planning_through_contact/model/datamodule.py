@@ -10,13 +10,19 @@ import torch
 from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
+from planning_through_contact.model.checkpoint_utils import dataset_paths_for_body
 from planning_through_contact.model.dataset import GCSH5Dataset
 
 
 @dataclass(frozen=True)
 class DatasetPaths:
-    h5_path: str | Path = "planning_through_contact/dataset/data/box_pushing/gcs_solutions.h5"
-    node_features_csv: str | Path = "planning_through_contact/dataset/data/box_pushing/node_features.csv"
+    h5_path: str | Path
+    node_features_csv: str | Path
+
+    @staticmethod
+    def for_body(body: str, data_root: str | Path = "planning_through_contact/dataset/data") -> "DatasetPaths":
+        paths = dataset_paths_for_body(body, data_root=data_root)
+        return DatasetPaths(h5_path=paths.h5_path, node_features_csv=paths.node_features_csv)
 
 
 class GCSDataModule(pl.LightningDataModule):
@@ -28,6 +34,7 @@ class GCSDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         include_source_target: bool = True,
         target: Literal["discrete", "sdp"] = "sdp",
+        max_train_samples: Optional[int] = None,
     ):
         super().__init__()
         self.paths = paths
@@ -35,6 +42,7 @@ class GCSDataModule(pl.LightningDataModule):
         self.num_workers = int(num_workers)
         self.include_source_target = bool(include_source_target)
         self.target = target
+        self.max_train_samples = max_train_samples
 
         self.ds_train: Optional[GCSH5Dataset] = None
         self.ds_val: Optional[GCSH5Dataset] = None
@@ -56,12 +64,13 @@ class GCSDataModule(pl.LightningDataModule):
                 include_source_target=self.include_source_target,
                 split="train",
                 target=self.target,
+                max_samples=self.max_train_samples,
             )
             self.ds_val = GCSH5Dataset(
                 h5_path=self.paths.h5_path,
                 node_features_csv=self.paths.node_features_csv,
                 include_source_target=self.include_source_target,
-                split="test",
+                split="val",
                 target=self.target,
             )
             self._pos_weight = (

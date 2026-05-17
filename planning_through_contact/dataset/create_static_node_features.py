@@ -146,8 +146,8 @@ def main() -> None:
     parser.add_argument(
         "--output_path",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/node_features.csv",
-        help="Output CSV path.",
+        default=None,
+        help="Output CSV path. Default: planning_through_contact/dataset/data/<body>/node_features.csv",
     )
     parser.add_argument(
         "--print_summary",
@@ -162,7 +162,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    out_path = Path(args.output_path)
+    out_path = (
+        Path(args.output_path)
+        if args.output_path is not None
+        else Path("planning_through_contact/dataset/data") / args.body / "node_features.csv"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     config = get_default_plan_config(

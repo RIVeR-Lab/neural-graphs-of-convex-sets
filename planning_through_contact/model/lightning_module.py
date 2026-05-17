@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
 import math
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import pytorch_lightning as pl
@@ -61,7 +61,17 @@ class GCSLightningModule(pl.LightningModule):
         train_hp: TrainingHParams = TrainingHParams(),
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["pos_weight"])
+        # Plain dict only: TensorBoard YAML cannot serialize frozen dataclass hparam objects.
+        self.save_hyperparameters(
+            {
+                "x_dim": x_dim,
+                "g_dim": g_dim,
+                "target": target,
+                "encoder_hp": dataclasses.asdict(encoder_hp),
+                "decoder_hp": dataclasses.asdict(decoder_hp),
+                "train_hp": dataclasses.asdict(train_hp),
+            }
+        )
 
         self.model = GCSFlowPredictor(
             x_dim=x_dim,
@@ -77,7 +87,8 @@ class GCSLightningModule(pl.LightningModule):
         self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
 
     def forward(self, batch) -> Tensor:  # type: ignore[override]
-        return self.model(x=batch.x, edge_index=batch.edge_index, g=batch.g, batch=batch.batch)
+        out = self.model(x=batch.x, edge_index=batch.edge_index, g=batch.g, batch=batch.batch)
+        return out.edge_logits
 
     def _step(self, batch, stage: str) -> Tensor:
         logits = self.forward(batch)

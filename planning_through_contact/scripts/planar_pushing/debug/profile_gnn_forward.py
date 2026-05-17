@@ -1,6 +1,6 @@
 """
 Profile the GNN forward pass only: run N times, discard first `warmup`, average the rest.
-Run from repo root: python3 planning_through_contact/scripts/planar_pushing/debug/profile_gnn_forward.py --ckpt_path checkpoints/gcs_gnn/box_pushing.ckpt [--num_runs 10] [--warmup 5]
+Run from repo root: python3 planning_through_contact/scripts/planar_pushing/debug/profile_gnn_forward.py --ckpt_path checkpoints/gcs_gnn/sugar_box_flow.ckpt [--num_runs 10] [--warmup 5]
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def main() -> None:
     parser.add_argument(
         "--node_features_csv",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/node_features.csv",
+        default=None,
     )
     parser.add_argument("--body", type=str, default="sugar_box")
     parser.add_argument(
@@ -52,6 +52,8 @@ def main() -> None:
 
     if args.warmup >= args.num_runs:
         raise ValueError("warmup must be < num_runs")
+    if args.node_features_csv is None:
+        args.node_features_csv = str(Path("planning_through_contact/dataset/data") / args.body / "node_features.csv")
 
     config = get_default_plan_config(slider_type=args.body, pusher_radius=0.015, use_case="normal")
     plans = get_default_experiment_plans(seed=0, num_trajs=1, config=config)

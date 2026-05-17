@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run flow-GNN training for one planar pushing body, regressing on SDP (phi_star).
-# Run from repo root: ./planning_through_contact/scripts/planar_pushing/train.sh [extra args...]
-# Defaults: BODY=sugar_box, W&B on, 500 epochs, batch 64, no early stopping.
+# Run flow GNN on the full train split for one body.
+# Checkpoint: checkpoints/gcs_gnn/${BODY}_flow.ckpt
+# Run from repo root: ./planning_through_contact/scripts/planar_pushing/train_full_dataset.sh [extra args...]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -22,13 +22,13 @@ if [[ ! -f "$NODE_FEATURES_CSV" ]]; then
   exit 1
 fi
 
-echo "Training flow GNN: body=$BODY h5=$H5_PATH node_features=$NODE_FEATURES_CSV"
+echo "Training full flow GNN: body=$BODY h5=$H5_PATH node_features=$NODE_FEATURES_CSV"
 exec python3 planning_through_contact/scripts/train_gcs_gnn.py \
   --body "$BODY" \
   --h5_path "$H5_PATH" \
   --node_features_csv "$NODE_FEATURES_CSV" \
   --target sdp \
-  --wandb_run_name "${BODY}_flow_gnn" \
+  --wandb_run_name "${BODY}_flow_gnn_full" \
   --max_epochs 500 \
   --batch_size 64 \
   --no_early_stopping \

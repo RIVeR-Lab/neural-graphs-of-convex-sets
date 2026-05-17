@@ -19,6 +19,19 @@ from torch_geometric.utils import softmax
 from planning_through_contact.model.hparams import DecoderHParams, EncoderHParams
 
 
+@dataclass(frozen=True)
+class GCSFlowOutput:
+    """
+    Flow-model outputs needed by downstream path ranking.
+
+    `node_embeddings` are the frozen GNN features h_v. `edge_logits` are the
+    decoder outputs aligned with `edge_index`.
+    """
+
+    node_embeddings: Tensor
+    edge_logits: Tensor
+
+
 def _broadcast_global(g: Tensor, batch: Optional[Tensor], num_nodes: int) -> Tensor:
     """
     Broadcast per-graph global features to per-node features.
@@ -307,7 +320,7 @@ class GCSFlowPredictor(nn.Module):
         self.encoder = BiGATv2Encoder(x_dim=x_dim, g_dim=g_dim, cfg=enc_cfg)
         self.decoder = EdgeMLPDecoder(d_model=enc_cfg.d_model, g_dim=g_dim, hp=decoder_hp)
 
-    def forward(
+    def encode(
         self,
         *,
         x: Tensor,
@@ -315,7 +328,40 @@ class GCSFlowPredictor(nn.Module):
         g: Tensor,
         batch: Optional[Tensor] = None,
     ) -> Tensor:
-        h = self.encoder(x=x, edge_index=edge_index, g=g, batch=batch)  # [N, d]
-        logits = self.decoder(h=h, edge_index=edge_index, g=g, node_batch=batch)  # [E]
-        return logits
+        """Return node embeddings h_v for the current graph/batch."""
+        return self.encoder(x=x, edge_index=edge_index, g=g, batch=batch)
+
+    def decode_edges(
+        self,
+        *,
+        node_embeddings: Tensor,
+        edge_index: Tensor,
+        g: Tensor,
+        batch: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Return edge logits aligned with `edge_index` from precomputed node embeddings."""
+        return self.decoder(
+            h=node_embeddings,
+            edge_index=edge_index,
+            g=g,
+            node_batch=batch,
+        )
+
+    def forward(
+        self,
+        *,
+        x: Tensor,
+        edge_index: Tensor,
+        g: Tensor,
+        batch: Optional[Tensor] = None,
+    ) -> GCSFlowOutput:
+        """Return both node embeddings and edge logits."""
+        h = self.encode(x=x, edge_index=edge_index, g=g, batch=batch)
+        logits = self.decode_edges(
+            node_embeddings=h,
+            edge_index=edge_index,
+            g=g,
+            batch=batch,
+        )
+        return GCSFlowOutput(node_embeddings=h, edge_logits=logits)
 

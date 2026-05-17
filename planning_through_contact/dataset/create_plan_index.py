@@ -12,7 +12,8 @@ Outputs:
 - XLSX: written if `pandas` and `openpyxl` are installed
 
 Example:
-  python dataset/create_plan_index.py --body sugar_box --seed 0 --num 3300
+  python dataset/create_plan_index.py --body sugar_box --seed 0
+  python dataset/create_plan_index.py --body tee --seed 0
 """
 
 from __future__ import annotations
@@ -67,35 +68,34 @@ def _rot2(theta: float) -> np.ndarray:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--num", type=int, default=3300)
+    parser.add_argument("--num_train", type=int, default=500)
+    parser.add_argument("--num_val", type=int, default=100)
+    parser.add_argument("--num_test", type=int, default=100)
     parser.add_argument("--body", type=str, default="sugar_box")
     parser.add_argument("--workspace_size", type=float, default=0.6)
     parser.add_argument("--pusher_radius", type=float, default=0.015)
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing",
+        default=None,
+        help="Output directory. Defaults to planning_through_contact/dataset/data/<body>.",
     )
     parser.add_argument("--output_stem", type=str, default=None)
-    parser.add_argument(
-        "--test_frac",
-        type=float,
-        default=0.01,
-        help="Fraction of --num to mark as test (rest is train).",
-    )
     parser.add_argument(
         "--split_seed",
         type=int,
         default=0,
-        help="Random seed used ONLY for shuffling train/test split assignment.",
+        help="Random seed used ONLY for shuffling train/val/test split assignment.",
     )
     args = parser.parse_args()
 
-    if not (0.0 <= args.test_frac <= 1.0):
-        raise ValueError("--test_frac must be in [0, 1]")
-    num_test = int(round(float(args.num) * float(args.test_frac)))
-    num_test = max(0, min(num_test, int(args.num)))
-    num_train = int(args.num) - num_test
+    if args.num_train < 0 or args.num_val < 0 or args.num_test < 0:
+        raise ValueError("--num_train, --num_val, and --num_test must be non-negative")
+
+    num_train = int(args.num_train)
+    num_val = int(args.num_val)
+    num_test = int(args.num_test)
+    num_plans = num_train + num_val + num_test
 
     config = get_default_plan_config(
         slider_type=args.body,
@@ -105,12 +105,12 @@ def main() -> None:
 
     plans = get_default_experiment_plans(
         seed=args.seed,
-        num_trajs=args.num,
+        num_trajs=num_plans,
         config=config,
         workspace_size=args.workspace_size,
     )
 
-    out_dir = Path(args.output_dir)
+    out_dir = Path(args.output_dir) if args.output_dir is not None else Path("planning_through_contact/dataset/data") / args.body
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stem = args.output_stem or "global_features"
@@ -121,13 +121,19 @@ def main() -> None:
 
     # Classical ML split: shuffle indices deterministically, then assign first Ntrain to train.
     rng = np.random.default_rng(args.split_seed)
-    perm = rng.permutation(args.num)
+    perm = rng.permutation(num_plans)
     train_ids = set(int(i) for i in perm[:num_train])
-    test_ids = set(int(i) for i in perm[num_train : num_train + num_test])
+    val_ids = set(int(i) for i in perm[num_train : num_train + num_val])
+    test_ids = set(int(i) for i in perm[num_train + num_val : num_train + num_val + num_test])
 
     rows: list[dict[str, Any]] = []
     for plan_id, plan in enumerate(tqdm(plans, desc="Building plan index")):
-        split = "train" if plan_id in train_ids else "test"
+        if plan_id in train_ids:
+            split = "train"
+        elif plan_id in val_ids:
+            split = "val"
+        else:
+            split = "test"
 
         # Determine which non-contact region the source connects to (before any GCS solve).
         # This is used to construct g_entry in the PDF.

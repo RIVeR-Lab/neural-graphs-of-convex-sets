@@ -20,6 +20,11 @@ from planning_through_contact.geometry.planar.planar_pose import PlanarPose
 from planning_through_contact.model.drake_rounding import predict_edge_flows_for_planner, round_from_predicted_flows
 from planning_through_contact.model.hparams import DecoderHParams, EncoderHParams
 from planning_through_contact.model.model import GCSFlowPredictor
+from planning_through_contact.model.ranknet import RankNetConfig
+from planning_through_contact.model.ranknet_inference import (
+    load_ranknet_from_checkpoint,
+    ranknet_round_from_flow_model,
+)
 from planning_through_contact.planning.planar.planar_pushing_planner import PlanarPushingPlanner
 from planning_through_contact.planning.planar.planar_plan_config import PlanarPushingStartAndGoal
 from planning_through_contact.visualize.colors import COLORS
@@ -270,7 +275,7 @@ def main() -> None:
     parser.add_argument(
         "--node_features_csv",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/node_features.csv",
+        default=None,
     )
 
     parser.add_argument("--ckpt_path", type=str, required=True, help="Lightning .ckpt from train_gcs_gnn.py")
@@ -297,7 +302,7 @@ def main() -> None:
     parser.add_argument(
         "--plan_index_csv",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/global_features.csv",
+        default=None,
         help="CSV with plan_id, split, poses. Used when --use_test_plans.",
     )
     parser.add_argument(
@@ -328,6 +333,17 @@ def main() -> None:
     parser.add_argument("--dropout_p", type=float, default=0.1)
     parser.add_argument("--decoder_hidden", type=str, default="256,256")
     parser.add_argument("--decoder_dropout_p", type=float, default=0.1)
+    parser.add_argument(
+        "--ranker_ckpt_path",
+        type=str,
+        default=None,
+        help="Optional RankNet checkpoint. If set, sampled paths are ranked before restriction/rounding solves.",
+    )
+    parser.add_argument("--ranker_layers", type=int, default=3)
+    parser.add_argument("--ranker_heads", type=int, default=4)
+    parser.add_argument("--ranker_ffn_hidden", type=int, default=256)
+    parser.add_argument("--ranker_score_hidden", type=int, default=64)
+    parser.add_argument("--ranker_dropout_p", type=float, default=0.1)
 
     parser.add_argument("--save_graph_edge_labels", action="store_true", default=True)
     parser.add_argument(
@@ -361,6 +377,11 @@ def main() -> None:
         args.save_video = False
     if args.no_contact_legend:
         args.show_contact_legend = False
+    data_dir = Path("planning_through_contact/dataset/data") / args.body
+    if args.node_features_csv is None:
+        args.node_features_csv = str(data_dir / "node_features.csv")
+    if args.plan_index_csv is None:
+        args.plan_index_csv = str(data_dir / "global_features.csv")
 
     if not args.debug:
         import logging
@@ -376,6 +397,15 @@ def main() -> None:
         plans_with_ids = [(pid, p) for pid, p in test_plans_with_ids]
         if args.max_test_plans is not None:
             plans_with_ids = plans_with_ids[: max(0, int(args.max_test_plans))]
+        if args.traj is not None:
+            k = int(args.traj)
+            if not plans_with_ids:
+                raise SystemExit("No test plans in CSV (split=='test').")
+            if k < 0 or k >= len(plans_with_ids):
+                raise SystemExit(
+                    f"--traj {k} is out of range for {len(plans_with_ids)} test plan(s) (use 0..{len(plans_with_ids) - 1})."
+                )
+            plans_with_ids = [plans_with_ids[k]]
         body_for_run = body
         if not plans_with_ids:
             raise SystemExit("No test plans found in CSV (split=='test'). Check plan_index_csv and split column.")
@@ -422,6 +452,19 @@ def main() -> None:
     device = resolve_torch_device(args.device)
     print(f"GNN inference device: {device}")
     model.to(device)
+    ranker = None
+    if args.ranker_ckpt_path is not None:
+        ranker_cfg = RankNetConfig(
+            d_model=int(args.d_model),
+            num_layers=int(args.ranker_layers),
+            num_heads=int(args.ranker_heads),
+            ffn_hidden_dim=int(args.ranker_ffn_hidden),
+            score_hidden_dim=int(args.ranker_score_hidden),
+            dropout_p=float(args.ranker_dropout_p),
+        )
+        ranker = load_ranknet_from_checkpoint(args.ranker_ckpt_path, cfg=ranker_cfg, map_location="cpu")
+        ranker.to(device)
+        print(f"RankNet inference enabled: {args.ranker_ckpt_path}")
 
     max_paths_val = args.max_paths if args.max_paths is not None else 100
     enforce_flow = (args.rounding_flow == "qp") and not args.no_flow_projection
@@ -438,37 +481,60 @@ def main() -> None:
 
         g = compute_g(config, plan)
 
-        timings: dict[str, float] = {}
-        t0 = time.perf_counter()
-        edge_flows = predict_edge_flows_for_planner(
-            planner=planner,
-            model=model,
-            g=g,
-            node_features_csv=args.node_features_csv,
-            device=device,
-            enforce_flow_conservation=enforce_flow,
-            timings=timings,
-        )
-        t_pred = time.perf_counter() - t0
-
         rounding_profile: dict[str, Any] = {}
-        t1 = time.perf_counter()
-        path = round_from_predicted_flows(
-            planner=planner,
-            edge_flows=edge_flows,
-            solver_params=solver_params,
-            max_paths=max_paths_val,
-            max_steps=int(args.max_steps),
-            seed=int(args.seed + idx),
-            profile=rounding_profile,
-        )
-        t_round = time.perf_counter() - t1
+        timings: dict[str, float] = {}
+        if ranker is None:
+            t0 = time.perf_counter()
+            edge_flows = predict_edge_flows_for_planner(
+                planner=planner,
+                model=model,
+                g=g,
+                node_features_csv=args.node_features_csv,
+                device=device,
+                enforce_flow_conservation=enforce_flow,
+                timings=timings,
+            )
+            t_pred = time.perf_counter() - t0
+
+            t1 = time.perf_counter()
+            path = round_from_predicted_flows(
+                planner=planner,
+                edge_flows=edge_flows,
+                solver_params=solver_params,
+                max_paths=max_paths_val,
+                max_steps=int(args.max_steps),
+                seed=int(args.seed + idx),
+                profile=rounding_profile,
+            )
+            t_round = time.perf_counter() - t1
+            inference_mode = "flow_rounding"
+        else:
+            t0 = time.perf_counter()
+            path, edge_flows = ranknet_round_from_flow_model(
+                planner=planner,
+                flow_model=model,
+                ranker=ranker,
+                g=g,
+                node_features_csv=args.node_features_csv,
+                solver_params=solver_params,
+                max_paths=max_paths_val,
+                max_steps=int(args.max_steps),
+                seed=int(args.seed + idx),
+                device=device,
+                profile=rounding_profile,
+            )
+            t_pred = float(rounding_profile.get("gnn_s", time.perf_counter() - t0))
+            t_round = time.perf_counter() - t0
+            timings.update({k: v for k, v in rounding_profile.items() if isinstance(v, float)})
+            inference_mode = "ranknet"
 
         # Profiling (match nominal GCS style: SDP solve / Rounding SNOPT / Rounding pipeline)
         output_name = f"plan_{plan_id}" if plan_id is not None else f"traj_{idx}"
         print(f"[{output_name}] GNN forward time: {timings.get('gnn_s', t_pred):.3f} s")
         if enforce_flow and "qp_s" in timings:
             print(f"[{output_name}] QP projection time: {timings['qp_s']:.3f} s")
+        if "ranknet_s" in timings:
+            print(f"[{output_name}] RankNet scoring time: {timings['ranknet_s']:.3f} s")
         if path is not None and getattr(path, "rounding_time", None) is not None:
             print(f"[{output_name}] Rounding time (SNOPT only): {path.rounding_time:.3f} s")
         else:
@@ -478,6 +544,7 @@ def main() -> None:
 
         summary = {
             "ok": path is not None and path.rounded_result is not None and path.rounded_result.is_success(),
+            "inference_mode": inference_mode,
             "rounding_flow": args.rounding_flow,
             "pred_time_s": float(t_pred),
             "rounding_pipeline_time_s": float(t_round),

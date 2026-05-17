@@ -101,7 +101,7 @@ def predict_edge_flows_for_planner(
     planner: PlanarPushingPlanner,
     model: GCSFlowPredictor,
     g: np.ndarray | torch.Tensor,
-    node_features_csv: str = "planning_through_contact/dataset/data/box_pushing/node_features.csv",
+    node_features_csv: str = "planning_through_contact/dataset/data/sugar_box/node_features.csv",
     device: Optional[torch.device] = None,
     enforce_flow_conservation: bool = True,
     timings: Optional[dict] = None,
@@ -176,7 +176,7 @@ def predict_edge_flows_for_planner(
         torch.cuda.synchronize(device)
     t0_gnn = time.perf_counter()
     with torch.no_grad():
-        logits = model(
+        out = model(
             x=x.to(device),
             edge_index=edge_index.to(device),
             g=g_t.to(device),
@@ -184,7 +184,7 @@ def predict_edge_flows_for_planner(
         )
         if device.type == "cuda":
             torch.cuda.synchronize(device)
-        phi_hat = torch.sigmoid(logits).detach().cpu()
+        phi_hat = torch.sigmoid(out.edge_logits).detach().cpu()
     if timings is not None:
         timings["gnn_s"] = time.perf_counter() - t0_gnn
 
@@ -218,7 +218,7 @@ def plan_with_gnn_flows(
     model: GCSFlowPredictor,
     g: np.ndarray | torch.Tensor,
     solver_params: PlanarSolverParams,
-    node_features_csv: str = "planning_through_contact/dataset/data/box_pushing/node_features.csv",
+    node_features_csv: str = "planning_through_contact/dataset/data/sugar_box/node_features.csv",
     max_paths: Optional[int] = None,
     max_steps: int = 512,
     seed: int = 0,

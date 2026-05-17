@@ -13,6 +13,7 @@ For each selected plan_id:
     - y (0/1) from the chosen feasible rounded path
     - phi_star from the convex relaxation solution
     - sdp_solve_time and path_cost
+    - candidate_paths/*: sampled paths with feasibility, cost, timing, and rank labels
 
 Default behavior solves plan_id range [0, 5) (first 5).
 """
@@ -67,12 +68,16 @@ def _extract_g(row: dict[str, str]) -> np.ndarray:
     return np.concatenate([g_pose, g_entry], axis=0)
 
 
+def _float_or_nan(value: Any) -> float:
+    return float("nan") if value is None else float(value)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--plan_index_csv",
         type=str,
-        default="planning_through_contact/dataset/data/box_pushing/global_features.csv",
+        default="planning_through_contact/dataset/data/sugar_box/global_features.csv",
         help="Path to plan-index CSV.",
     )
     parser.add_argument(
@@ -103,17 +108,25 @@ def main() -> None:
         "--h5_path",
         type=str,
         default=None,
-        help="Output HDF5 path. Defaults to planning_through_contact/dataset/data/box_pushing/gcs_solutions.h5",
+        help="Output HDF5 path. Defaults to <plan_index_csv parent>/gcs_solutions.h5",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable solver debug output (slower, verbose).",
     )
+    parser.add_argument(
+        "--num_candidate_paths",
+        type=int,
+        default=100,
+        help="Number of unique GCS-sampled candidate paths to save for RankNet labels.",
+    )
     args = parser.parse_args()
 
     if (args.start_id is None) != (args.end_id is None):
         raise ValueError("Provide both --start_id and --end_id, or provide neither.")
+    if args.num_candidate_paths <= 0:
+        raise ValueError("--num_candidate_paths must be positive")
 
     csv_path = Path(args.plan_index_csv)
     if not csv_path.exists():
@@ -130,7 +143,7 @@ def main() -> None:
     h5_path = (
         Path(args.h5_path)
         if args.h5_path is not None
-        else Path("planning_through_contact/dataset/data/box_pushing") / "gcs_solutions.h5"
+        else csv_path.parent / "gcs_solutions.h5"
     )
     h5_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -167,6 +180,7 @@ def main() -> None:
         slider_type=body, pusher_radius=pusher_radius, use_case="normal"
     )
     solver_params = get_default_solver_params(args.debug, clarabel=False)
+    solver_params.rounding_steps = int(args.num_candidate_paths)
 
     out_folder = None
     if args.save_artifacts:
@@ -203,19 +217,40 @@ def main() -> None:
             config.start_and_goal = start_and_goal
             planner = PlanarPushingPlanner(config)
             planner.formulate_problem()
-            path = planner.plan_path(solver_params)
 
-            if path is None or path.rounded_result is None or not path.rounded_result.is_success():
-                continue  # only keep feasible rounded instances
+            relaxed_res = planner._solve(solver_params)
+            planner.relaxed_gcs_result = relaxed_res
+            if relaxed_res is None or not relaxed_res.is_success():
+                continue
+
+            rounding_profile: dict[str, Any] = {}
+            candidate_paths = planner.get_solution_paths(
+                relaxed_res,
+                solver_params,
+                profile=rounding_profile,
+            )
+            if candidate_paths is None:
+                continue
+
+            feasible_paths = planner._get_rounded_paths(
+                solver_params,
+                candidate_paths,
+                profile=rounding_profile,
+            )
+            if feasible_paths is None:
+                continue
+
+            path = planner._pick_best_path(feasible_paths)
+            planner.path = path
+
+            if path.rounded_result is None or not path.rounded_result.is_success():
+                continue  # only keep instances with at least one feasible rounded path
 
             all_edges = list(planner.gcs.Edges())
             edge_u = [e.u().name() for e in all_edges]
             edge_v = [e.v().name() for e in all_edges]
 
             # Teacher flows from convex relaxation.
-            relaxed_res = planner.relaxed_gcs_result
-            if relaxed_res is None or not relaxed_res.is_success():
-                continue
             phi_star = np.array(
                 [float(relaxed_res.GetSolution(e.phi())) for e in all_edges],
                 dtype=np.float32,
@@ -264,6 +299,66 @@ def main() -> None:
             grp.create_dataset("path_edge_u", data=np.array(path_u, dtype=object), dtype=str_dtype)
             grp.create_dataset("path_edge_v", data=np.array(path_v, dtype=object), dtype=str_dtype)
             grp.create_dataset("path_edge_order", data=np.array(path_order, dtype=np.int32), dtype=np.int32)
+
+            # RankNet labels: all sampled candidate paths from ground-truth relaxation flows.
+            candidate_entries = list(rounding_profile.get("paths", []))
+            candidates_grp = grp.create_group("candidate_paths")
+            candidates_grp.attrs["num_candidate_paths"] = len(candidate_entries)
+            candidates_grp.attrs["path_sampling_s"] = _float_or_nan(
+                rounding_profile.get("path_sampling_s")
+            )
+            candidates_grp.attrs["num_unique_paths"] = int(
+                rounding_profile.get("num_unique_paths", len(candidate_entries))
+            )
+            candidates_grp.attrs["rounding_steps"] = int(solver_params.rounding_steps)
+            candidates_grp.attrs["max_rounding_trials"] = int(solver_params.max_rounding_trials)
+
+            feasible_candidate_idxs = [
+                i
+                for i, entry in enumerate(candidate_entries)
+                if bool(entry.get("rounding_success", False))
+            ]
+            feasible_candidate_idxs.sort(
+                key=lambda i: _float_or_nan(candidate_entries[i].get("rounded_cost"))
+            )
+            rank_by_idx = {idx: rank for rank, idx in enumerate(feasible_candidate_idxs)}
+
+            for candidate_idx, entry in enumerate(candidate_entries):
+                cand_grp = candidates_grp.create_group(f"{candidate_idx:03d}")
+                feasible = bool(entry.get("rounding_success", False))
+                cand_grp.attrs["path_index"] = int(entry.get("path_index", candidate_idx))
+                cand_grp.attrs["feasible"] = feasible
+                cand_grp.attrs["rank"] = int(rank_by_idx.get(candidate_idx, -1))
+                cand_grp.attrs["convex_restriction_success"] = bool(
+                    entry.get("convex_restriction_success", False)
+                )
+                cand_grp.attrs["rounding_success"] = feasible
+                cand_grp.attrs["convex_restriction_s"] = _float_or_nan(
+                    entry.get("convex_restriction_s")
+                )
+                cand_grp.attrs["convex_restriction_solver_s"] = _float_or_nan(
+                    entry.get("convex_restriction_solver_s")
+                )
+                cand_grp.attrs["rounding_s"] = _float_or_nan(entry.get("rounding_s"))
+                cand_grp.attrs["relaxed_cost"] = _float_or_nan(entry.get("relaxed_cost"))
+                cand_grp.attrs["rounded_cost"] = _float_or_nan(entry.get("rounded_cost"))
+
+                cand_edge_u = entry.get("path_edge_u", [])
+                cand_edge_v = entry.get("path_edge_v", [])
+                cand_edge_order = entry.get(
+                    "path_edge_order", list(range(1, len(cand_edge_u) + 1))
+                )
+                cand_grp.create_dataset(
+                    "edge_u", data=np.array(cand_edge_u, dtype=object), dtype=str_dtype
+                )
+                cand_grp.create_dataset(
+                    "edge_v", data=np.array(cand_edge_v, dtype=object), dtype=str_dtype
+                )
+                cand_grp.create_dataset(
+                    "edge_order",
+                    data=np.array(cand_edge_order, dtype=np.int32),
+                    dtype=np.int32,
+                )
 
             # Optional slow debug artifacts.
             if args.save_artifacts and out_folder is not None:

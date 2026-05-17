@@ -68,10 +68,11 @@ class GCSH5Dataset(Dataset):
         self,
         *,
         h5_path: str | Path,
-        node_features_csv: str | Path = "planning_through_contact/dataset/data/box_pushing/node_features.csv",
+        node_features_csv: str | Path,
         include_source_target: bool = True,
         split: Optional[str] = None,
         target: Literal["discrete", "sdp"] = "sdp",
+        max_samples: Optional[int] = None,
     ):
         super().__init__()
         self.h5_path = Path(h5_path)
@@ -79,6 +80,7 @@ class GCSH5Dataset(Dataset):
         self.include_source_target = include_source_target
         self.split = split
         self.target = target
+        self.max_samples = max_samples
 
         if not self.h5_path.exists():
             raise FileNotFoundError(self.h5_path)
@@ -120,6 +122,11 @@ class GCSH5Dataset(Dataset):
                 if self.split is None or split == self.split:
                     out.append(H5SampleIndex(plan_id=pid, split=split))
         out.sort(key=lambda s: s.plan_id)
+        if self.max_samples is not None:
+            cap = int(self.max_samples)
+            if cap < 0:
+                raise ValueError("max_samples must be non-negative")
+            out = out[:cap]
         return out
 
     @property
