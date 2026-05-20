@@ -16,4 +16,5 @@ checkpoints*
 *.pdf
 *events.out.tfevents*
 runs/
-benchmark*
+benchmark_results
+*claude

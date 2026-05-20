@@ -619,6 +619,7 @@ def plot_simple_traj(
     START_TRANSPARENCY = 1.0
 
     if keyframe_times is None:
+
         keyframe_times = np.linspace(traj.start_time, traj.end_time, num_keyframes + 1)  # type: ignore
 
     assert keyframe_times is not None
@@ -643,7 +644,7 @@ def plot_simple_traj(
 
         ax = axs[keyframe_idx]
 
-        ax.set_aspect("auto")
+        ax.set_aspect("equal")
 
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
@@ -742,7 +743,7 @@ def plot_simple_traj(
             linewidth=start_goal_width,
             linestyle="--",
         )
-        if traj.config.start_and_goal.pusher_initial_pose is not None:
+        if show_goal_pusher and traj.config.start_and_goal.pusher_initial_pose is not None:
             p_WP = traj.config.start_and_goal.pusher_target_pose.pos()  # type: ignore
             circle = plt.Circle(
                 p_WP.flatten(),
@@ -792,6 +793,10 @@ def make_traj_figure(
     split_on_mode_type: bool = False,
     num_contact_frames: int = 5,
     num_non_collision_frames: int = 5,
+    show_start_pose: bool = True,
+    show_goal_pusher: bool = True,
+    save_individual_panels: bool = False,
+    show_contact_legend: bool = False,
 ) -> None:
     _set_type1_serif_font()
     # NOTE(bernhardpg): This function is a mess!
@@ -806,11 +811,10 @@ def make_traj_figure(
         slider_color = COLORS["aquamarine4"].diffuse()
 
     PUSHER_COLOR = COLORS["firebrick3"].diffuse()
-    # PUSHER_COLOR = CADMIUMORANGE.diffuse()
 
-    LINE_COLOR = BLACK.diffuse()
+    LINE_COLOR = COLORS["aquamarine4"].diffuse()
 
-    GOAL_COLOR = EMERALDGREEN.diffuse()
+    GOAL_COLOR = COLORS["aquamarine4"].diffuse()
     GOAL_TRANSPARENCY = 1.0
 
     START_COLOR = CRIMSON.diffuse()
@@ -867,7 +871,7 @@ def make_traj_figure(
         else:
             ax = axs[segment_idx]
 
-        ax.set_aspect("auto")
+        ax.set_aspect("equal")
 
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
@@ -879,11 +883,11 @@ def make_traj_figure(
         )
         frame_count = 0
 
-        make_circle = lambda p_WP, fill_transparency: plt.Circle(
+        make_circle = lambda p_WP, fill_transparency, color=PUSHER_COLOR: plt.Circle(
             p_WP.flatten(),
             traj.config.pusher_radius,  # type: ignore
             edgecolor=LINE_COLOR,
-            facecolor=PUSHER_COLOR,
+            facecolor=color,
             linewidth=1,
             alpha=fill_transparency,
         )
@@ -930,6 +934,7 @@ def make_traj_figure(
 
                 if isinstance(traj_segment, NonCollisionTrajSegment):
                     num_frames_in_segment = num_non_collision_frames
+                    segment_pusher_color = CRIMSON.diffuse()
 
                     if segment_idx < len(segment_groups) - 1:
                         num_frames_in_group = (
@@ -941,6 +946,7 @@ def make_traj_figure(
                         )
                 else:  # face contact
                     num_frames_in_segment = num_contact_frames
+                    segment_pusher_color = EMERALDGREEN.diffuse()
                     # Only one face contact
                     num_frames_in_group = num_frames_in_segment
 
@@ -967,7 +973,7 @@ def make_traj_figure(
                     )
                     if transparency > 1:
                         breakpoint()
-                    ax.add_patch(make_circle(p_WP, transparency))
+                    ax.add_patch(make_circle(p_WP, transparency, color=segment_pusher_color))
 
                     # get the constant slider pose
                     R_WB = traj_segment.get_R_WB(t)[:2, :2]  # 2x2 matrix
@@ -1113,31 +1119,32 @@ def make_traj_figure(
                         frame_count += 1
 
         # Plot start pos
-        slider_initial_pose = traj.config.start_and_goal.slider_initial_pose  # type: ignore
-        p_WB = slider_initial_pose.pos()
-        R_WB = slider_initial_pose.two_d_rot_matrix()
-        goal_vertices_W = get_vertices_W(p_WB, R_WB)
         start_goal_width = 1.5
-        ax.plot(
-            goal_vertices_W[0, :],
-            goal_vertices_W[1, :],
-            color=START_COLOR,
-            alpha=START_TRANSPARENCY,
-            linewidth=start_goal_width,
-            linestyle="--",
-        )
-        if traj.config.start_and_goal.pusher_initial_pose is not None:
-            p_WP = traj.config.start_and_goal.pusher_initial_pose.pos()  # type: ignore
-            circle = plt.Circle(
-                p_WP.flatten(),
-                traj.config.pusher_radius,  # type: ignore
-                edgecolor=START_COLOR,
-                facecolor="none",
-                linewidth=start_goal_width,
+        if show_start_pose:
+            slider_initial_pose = traj.config.start_and_goal.slider_initial_pose  # type: ignore
+            p_WB = slider_initial_pose.pos()
+            R_WB = slider_initial_pose.two_d_rot_matrix()
+            goal_vertices_W = get_vertices_W(p_WB, R_WB)
+            ax.plot(
+                goal_vertices_W[0, :],
+                goal_vertices_W[1, :],
+                color=START_COLOR,
                 alpha=START_TRANSPARENCY,
+                linewidth=start_goal_width,
                 linestyle="--",
             )
-            ax.add_patch(circle)
+            if traj.config.start_and_goal.pusher_initial_pose is not None:
+                p_WP = traj.config.start_and_goal.pusher_initial_pose.pos()  # type: ignore
+                circle = plt.Circle(
+                    p_WP.flatten(),
+                    traj.config.pusher_radius,  # type: ignore
+                    edgecolor=START_COLOR,
+                    facecolor="none",
+                    linewidth=start_goal_width,
+                    alpha=START_TRANSPARENCY,
+                    linestyle="--",
+                )
+                ax.add_patch(circle)
 
         # Plot target pos
         slider_target_pose = traj.config.start_and_goal.slider_target_pose  # type: ignore
@@ -1152,7 +1159,7 @@ def make_traj_figure(
             linewidth=start_goal_width,
             linestyle="--",
         )
-        if traj.config.start_and_goal.pusher_initial_pose is not None:
+        if show_goal_pusher and traj.config.start_and_goal.pusher_initial_pose is not None:
             p_WP = traj.config.start_and_goal.pusher_target_pose.pos()  # type: ignore
             circle = plt.Circle(
                 p_WP.flatten(),
@@ -1179,9 +1186,63 @@ def make_traj_figure(
                 loc="upper left",
             )
 
-    fig.tight_layout()
+    legend_handles = [
+        Line2D([0], [0], marker="o", linestyle="None",
+               markerfacecolor=EMERALDGREEN.diffuse(), markeredgecolor=BLACK.diffuse(),
+               markersize=8, label="Pusher (contact)"),
+        Line2D([0], [0], marker="o", linestyle="None",
+               markerfacecolor=CRIMSON.diffuse(), markeredgecolor=BLACK.diffuse(),
+               markersize=8, label="Pusher (non-contact)"),
+    ]
+
+    if show_contact_legend:
+        fig.legend(
+            handles=legend_handles,
+            loc="upper center",
+            ncol=1,
+            fontsize=11,
+            frameon=True,
+            bbox_to_anchor=(0.5, 1.0),
+        )
+        fig.tight_layout(rect=[0, 0, 1, 0.88])
+    else:
+        fig.tight_layout()
+
     if filename:
         fig.savefig(filename + f"_trajectory.pdf", format="pdf")  # type: ignore
+        if save_individual_panels:
+            panel_axs = [axs] if len(segment_groups) == 1 else list(axs)
+            renderer = fig.canvas.get_renderer()
+            for panel_idx, panel_ax in enumerate(panel_axs):
+                extent = panel_ax.get_tightbbox(renderer).transformed(
+                    fig.dpi_scale_trans.inverted()
+                )
+                fig.savefig(
+                    f"{filename}_panel_{panel_idx}.pdf",
+                    format="pdf",
+                    bbox_inches=extent,
+                )
+            # Save legend as its own standalone PDF
+            goal_handle = mpatches.Patch(
+                facecolor="none",
+                edgecolor=EMERALDGREEN.diffuse(),
+                linewidth=1.5,
+                linestyle="--",
+                label="Goal",
+            )
+            full_legend_handles = legend_handles + [goal_handle]
+            fig_leg, ax_leg = plt.subplots(figsize=(3.2, 1.1))
+            ax_leg.set_axis_off()
+            ax_leg.legend(
+                handles=full_legend_handles,
+                loc="center",
+                ncol=1,
+                fontsize=11,
+                frameon=True,
+            )
+            fig_leg.tight_layout()
+            fig_leg.savefig(f"{filename}_legend.pdf", format="pdf", bbox_inches="tight")
+            plt.close(fig_leg)
         plt.close()
     else:
         plt.show()

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -13,7 +12,6 @@ from planning_through_contact.experiments.utils import (
     get_default_experiment_plans,
     get_default_plan_config,
     get_default_solver_params,
-    get_time_as_str,
 )
 from planning_through_contact.geometry.planar.non_collision import NonCollisionMode
 from planning_through_contact.geometry.planar.planar_pose import PlanarPose
@@ -27,8 +25,7 @@ from planning_through_contact.model.ranknet_inference import (
 )
 from planning_through_contact.planning.planar.planar_pushing_planner import PlanarPushingPlanner
 from planning_through_contact.planning.planar.planar_plan_config import PlanarPushingStartAndGoal
-from planning_through_contact.visualize.colors import COLORS
-from planning_through_contact.visualize.planar_pushing import make_traj_figure, visualize_planar_pushing_trajectory
+from planning_through_contact.visualize.planar_pushing import visualize_planar_pushing_trajectory
 
 
 def resolve_torch_device(device_arg: str) -> torch.device:
@@ -161,108 +158,6 @@ def load_gcs_flow_predictor_from_lightning_ckpt(
     return model
 
 
-def export_edge_labels(
-    *,
-    out_dir: Path,
-    planner: PlanarPushingPlanner,
-    path,
-    edge_flows: Optional[np.ndarray] = None,
-) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    all_edges = list(planner.gcs.Edges())
-    edge_u = [e.u().name() for e in all_edges]
-    edge_v = [e.v().name() for e in all_edges]
-    edge_keys = list(zip(edge_u, edge_v))
-
-    path_edge_keys: set[tuple[str, str]] = set()
-    path_edge_order: dict[tuple[str, str], list[int]] = {}
-    path_vertex_names: list[str] = []
-    if path is not None:
-        path_edge_keys = {(e.u().name(), e.v().name()) for e in path.edges}
-        for idx, e in enumerate(path.edges, start=1):
-            path_edge_order.setdefault((e.u().name(), e.v().name()), []).append(idx)
-        path_vertex_names = path.get_path_names()
-
-    y = [1 if k in path_edge_keys else 0 for k in edge_keys]
-    phi = None if edge_flows is None else [float(x) for x in np.asarray(edge_flows).reshape((-1,)).tolist()]
-
-    payload: dict[str, Any] = {
-        "num_vertices": len(list(planner.gcs.Vertices())),
-        "num_edges": len(all_edges),
-        "num_positive_edges": int(sum(y)),
-        "path_vertex_names": path_vertex_names,
-        "edges": [
-            {
-                "u": u,
-                "v": v,
-                "y": int(label),
-                **({"phi": float(phi_i)} if phi is not None else {}),
-                **({"order": path_edge_order.get((u, v), [])} if int(label) == 1 else {}),
-            }
-            for ((u, v), label, phi_i) in zip(edge_keys, y, (phi if phi is not None else [0.0] * len(y)))
-        ]
-        if phi is not None
-        else [{"u": u, "v": v, "y": int(label), **({"order": path_edge_order.get((u, v), [])} if int(label) == 1 else {})}
-              for ((u, v), label) in zip(edge_keys, y)],
-    }
-
-    (out_dir / "edges.json").write_text(json.dumps(payload, indent=2))
-
-
-def _fmt_phi(phi: float) -> str:
-    if np.isnan(phi):
-        return "?"
-    return f"{phi:.3f}"
-
-
-def write_graph_svg(
-    out_path: Path,
-    edge_u: list[str],
-    edge_v: list[str],
-    y: list[int],
-    phi: list[float],
-    path_edge_order: dict[tuple[str, str], list[int]],
-    rankdir: str = "LR",
-) -> None:
-    """Write a Graphviz SVG of the GCS graph with edge labels (y, phi) and path order."""
-    try:
-        import pydot  # type: ignore
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError("Missing `pydot`. Install it to save graph SVGs.") from e
-
-    node_names = sorted(set(edge_u) | set(edge_v))
-    dot = pydot.Dot(graph_type="digraph", rankdir=rankdir)
-    for n in node_names:
-        attrs: dict[str, str] = {}
-        if n == "source":
-            attrs.update({"shape": "doublecircle", "color": "darkgreen"})
-        elif n == "target":
-            attrs.update({"shape": "doublecircle", "color": "darkblue"})
-        dot.add_node(pydot.Node(n, **attrs))
-
-    for u, v, yi, phii in zip(edge_u, edge_v, y, phi):
-        if yi == 1:
-            orders = path_edge_order.get((u, v), [])
-            order_str = ",".join(str(o) for o in orders) if orders else "?"
-            edge_attrs = {
-                "label": f'<<FONT COLOR="black">1</FONT><FONT COLOR="blue"> {order_str}</FONT><FONT COLOR="gray40">, {_fmt_phi(float(phii))}</FONT>>',
-                "color": "red",
-                "penwidth": "3",
-            }
-        else:
-            edge_attrs = {
-                "label": f'<<FONT COLOR="black">0</FONT><FONT COLOR="gray40">, {_fmt_phi(float(phii))}</FONT>>',
-                "color": "gray70",
-                "penwidth": "1",
-            }
-        dot.add_edge(pydot.Edge(u, v, **edge_attrs))
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    stem = out_path.with_suffix("")
-    dot.write_raw(f"{stem}.dot")
-    dot.write_svg(str(out_path))
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -283,7 +178,7 @@ def main() -> None:
         "--device",
         type=str,
         choices=["auto", "cuda", "cpu"],
-        default="cpu",
+        default="cuda",
         help="Device for model inference. Use 'cuda' for GPU or 'auto' to use CUDA when available.",
     )
     parser.add_argument(
@@ -345,7 +240,6 @@ def main() -> None:
     parser.add_argument("--ranker_score_hidden", type=int, default=64)
     parser.add_argument("--ranker_dropout_p", type=float, default=0.1)
 
-    parser.add_argument("--save_graph_edge_labels", action="store_true", default=True)
     parser.add_argument(
         "--save_video",
         action="store_true",
@@ -420,7 +314,11 @@ def main() -> None:
     config = get_default_plan_config(slider_type=body_for_run, pusher_radius=0.015, use_case="normal")
     solver_params = get_default_solver_params(args.debug, clarabel=False)
 
-    folder_name = f"{args.output_dir}/gnn_run_{get_time_as_str()}_{body_for_run}"
+    base = Path(args.output_dir) / body_for_run
+    base.mkdir(parents=True, exist_ok=True)
+    existing = [d for d in base.iterdir() if d.is_dir() and d.name.startswith("video_")]
+    next_n = max((int(d.name.split("_")[-1]) for d in existing if d.name.split("_")[-1].isdigit()), default=0) + 1
+    folder_name = str(base / f"video_{next_n}")
     if args.traj is not None and not args.use_test_plans:
         folder_name += f"_traj_{args.traj}"
     Path(folder_name).mkdir(parents=True, exist_ok=True)
@@ -528,125 +426,16 @@ def main() -> None:
             timings.update({k: v for k, v in rounding_profile.items() if isinstance(v, float)})
             inference_mode = "ranknet"
 
-        # Profiling (match nominal GCS style: SDP solve / Rounding SNOPT / Rounding pipeline)
         output_name = f"plan_{plan_id}" if plan_id is not None else f"traj_{idx}"
-        print(f"[{output_name}] GNN forward time: {timings.get('gnn_s', t_pred):.3f} s")
-        if enforce_flow and "qp_s" in timings:
-            print(f"[{output_name}] QP projection time: {timings['qp_s']:.3f} s")
-        if "ranknet_s" in timings:
-            print(f"[{output_name}] RankNet scoring time: {timings['ranknet_s']:.3f} s")
-        if path is not None and getattr(path, "rounding_time", None) is not None:
-            print(f"[{output_name}] Rounding time (SNOPT only): {path.rounding_time:.3f} s")
-        else:
-            print(f"[{output_name}] Rounding time (SNOPT only): N/A")
-        print(f"[{output_name}] Rounding pipeline time (sample+restrictions+SNOPT): {t_round:.3f} s")
-        planner.print_rounding_profile(output_name, rounding_profile, path)
+        ok = path is not None and path.rounded_result is not None and path.rounded_result.is_success()
+        print(f"[{output_name}] ok={ok}  gnn={timings.get('gnn_s', t_pred):.3f}s  total={t_round:.3f}s")
 
-        summary = {
-            "ok": path is not None and path.rounded_result is not None and path.rounded_result.is_success(),
-            "inference_mode": inference_mode,
-            "rounding_flow": args.rounding_flow,
-            "pred_time_s": float(t_pred),
-            "rounding_pipeline_time_s": float(t_round),
-            "path_cost": None
-            if path is None
-            else float(
-                path.rounded_result.get_optimal_cost()
-                if (path.rounded_result is not None and path.rounded_result.is_success())
-                else path.relaxed_cost
-            ),
-        }
-
-        # Test loss vs H5 labels when using test plans and H5 is provided
-        if args.use_test_plans and h5_path is not None and plan_id is not None and h5_path.exists():
-            try:
-                import h5py  # type: ignore
-                import torch.nn.functional as F
-                with h5py.File(h5_path, "r") as h5:
-                    if str(plan_id) in h5["samples"]:
-                        grp = h5["samples"][str(plan_id)]
-                        y_h5 = np.array(grp["y"][()], dtype=np.float32)
-                        phi_star = np.array(grp["phi_star"][()], dtype=np.float32)
-                        phi_pred = np.asarray(edge_flows).reshape((-1,)).astype(np.float32)
-                        if phi_pred.size == phi_star.size and phi_pred.size == y_h5.size:
-                            pt_y = torch.as_tensor(y_h5, dtype=torch.float32, device=device)
-                            pt_phi = torch.as_tensor(phi_pred, dtype=torch.float32, device=device)
-                            summary["test_loss_discrete_bce"] = float(F.binary_cross_entropy_with_logits(pt_phi, pt_y).item())
-                            summary["test_loss_sdp_mse"] = float(np.mean((phi_pred - phi_star) ** 2))
-            except Exception as e:
-                summary["test_loss_error"] = str(e)
-
-        (out / "gnn_plan_summary.json").write_text(json.dumps(summary, indent=2))
-
-        if args.save_graph_edge_labels:
-            export_edge_labels(out_dir=out / "graph_edge_labels", planner=planner, path=path, edge_flows=edge_flows)
-            # GNN graph SVG (edge flows + rounded path)
-            all_edges = list(planner.gcs.Edges())
-            edge_u = [e.u().name() for e in all_edges]
-            edge_v = [e.v().name() for e in all_edges]
-            edge_keys = list(zip(edge_u, edge_v))
-            path_edge_keys = {(e.u().name(), e.v().name()) for e in path.edges} if path is not None else set()
-            path_edge_order: dict[tuple[str, str], list[int]] = {}
-            if path is not None:
-                for i, e in enumerate(path.edges, start=1):
-                    path_edge_order.setdefault((e.u().name(), e.v().name()), []).append(i)
-            y_list = [1 if k in path_edge_keys else 0 for k in edge_keys]
-            phi_list = [float(x) for x in np.asarray(edge_flows).reshape((-1,)).tolist()]
-            write_graph_svg(
-                out / "prediction.svg",
-                edge_u=edge_u,
-                edge_v=edge_v,
-                y=y_list,
-                phi=phi_list,
-                path_edge_order=path_edge_order,
-            )
-            # Ground-truth SVG from H5 when available
-            if args.use_test_plans and h5_path is not None and plan_id is not None and h5_path.exists():
-                try:
-                    import h5py  # type: ignore
-                    with h5py.File(h5_path, "r") as h5:
-                        if str(plan_id) in h5["samples"]:
-                            grp = h5["samples"][str(plan_id)]
-                            gt_u = [s.decode("utf-8") if isinstance(s, (bytes, bytearray)) else str(s) for s in grp["edge_u"][()]]
-                            gt_v = [s.decode("utf-8") if isinstance(s, (bytes, bytearray)) else str(s) for s in grp["edge_v"][()]]
-                            gt_y = [int(x) for x in grp["y"][()]]
-                            gt_phi = [float(x) for x in grp["phi_star"][()]]
-                            po: dict[tuple[str, str], list[int]] = {}
-                            if "path_edge_u" in grp and "path_edge_v" in grp and "path_edge_order" in grp:
-                                pu = grp["path_edge_u"][()]
-                                pv = grp["path_edge_v"][()]
-                                po_arr = np.array(grp["path_edge_order"][()], dtype=np.int32)
-                                pu = [s.decode("utf-8") if isinstance(s, (bytes, bytearray)) else str(s) for s in pu]
-                                pv = [s.decode("utf-8") if isinstance(s, (bytes, bytearray)) else str(s) for s in pv]
-                                for u, v, o in zip(pu, pv, po_arr):
-                                    po.setdefault((u, v), []).append(int(o))
-                            write_graph_svg(
-                                out / "ground_truth.svg",
-                                edge_u=gt_u,
-                                edge_v=gt_v,
-                                y=gt_y,
-                                phi=gt_phi,
-                                path_edge_order=po,
-                            )
-                except Exception:
-                    pass
-
-        # Save trajectories (pickles + PDF figures) if we have a path
-        if path is not None:
+        if path is not None and path.rounded_result is not None and path.rounded_result.is_success():
+            traj_rounded = path.to_traj(rounded=True)
             traj_dir = out / "trajectory"
             traj_dir.mkdir(parents=True, exist_ok=True)
-            traj_relaxed = path.to_traj()
-            traj_relaxed.save(str(traj_dir / "traj_relaxed.pkl"))  # type: ignore
-            slider_color = COLORS["aquamarine4"].diffuse()
-            make_traj_figure(traj_relaxed, filename=str(traj_dir / "traj_relaxed.pdf"), slider_color=slider_color)
-            traj_rounded = None
-            if path.rounded_result is not None and path.rounded_result.is_success():
-                traj_rounded = path.to_traj(rounded=True)
-                traj_rounded.save(str(traj_dir / "traj_rounded.pkl"))  # type: ignore
-                make_traj_figure(traj_rounded, filename=str(traj_dir / "traj_rounded.pdf"), slider_color=slider_color)
 
-            # Motion videos (same style as create_plans.py): prediction and optionally ground truth
-            if args.save_video and traj_rounded is not None:
+            if args.save_video:
                 animation_lims = traj_rounded.get_pos_limits(buffer=0.12)
                 visualize_planar_pushing_trajectory(
                     traj_rounded,
