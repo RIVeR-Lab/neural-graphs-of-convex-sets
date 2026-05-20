@@ -14,7 +14,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["planning_through_contact*"]
+include = ["planning_through_contact*", "quadrotor*"]
 
 [tool.setuptools.package-data]
 planning_through_contact = [
@@ -26,5 +26,11 @@ planning_through_contact = [
   "**/*.png",
   "**/*.gif",
   "**/*.m",
+]
+quadrotor = [
+  "**/*.sdf",
+  "**/*.obj",
+  "**/*.mtl",
+  "**/*.png",
 ]
 

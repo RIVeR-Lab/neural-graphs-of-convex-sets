@@ -25,3 +25,4 @@ scikit-learn
 pytorch-lightning
 seaborn
 h5py
+cvxpy
