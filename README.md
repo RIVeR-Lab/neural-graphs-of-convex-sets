@@ -1,12 +1,15 @@
 # Neural Graphs of Convex Sets
 
-This repository contains the code associated to our paper [Neural Graphs of Convex Sets: Towards Real-Time Mixed Discrete-and-Continuous Motion Planning](https://neural-gcs.github.io/).
+This repository contains the code associated to our paper [Learning to Plan on Graphs of Convex Sets:Accelerating Mixed Discrete-and-Continuous Motion Planning](https://neural-gcs.github.io/).
 
-**TL;DR:** We accelerate motion planning in Graphs of Convex Sets by replacing the convex relaxation stage with a Graph Neural Network that predicts edge flows, from which we sample candidate paths. A RankNet-style ranker identifies the top candidate paths, and we round only those paths. We demonstrate the proposed approach on obstacle-free quadrotor motion planning and planning through contact.
+**TL;DR:** We accelerate motion planning in Graphs of Convex Sets by replacing the convex relaxation stage with a Graph Neural Network that predicts edge flows, from which we sample candidate paths. A RankNet-style ranker identifies the top candidate paths, and we round only those paths. A RankNet-style ranker identifies the top candidate paths, and we solve convex restrictions only for those paths. We demonstrate the proposed approach on obstacle-free motion planning for a quadrotor and a robotic manipulator, as well as planning through contact.
 
 ## Acknowledgments
 
-We are grateful to the authors of [Motion Planning around Obstacles with Convex Optimization](https://arxiv.org/abs/2205.04422) and [Towards Tight Convex Relaxations for Contact-Rich Manipulation](https://arxiv.org/abs/2402.10312) for making their codebases public. This project builds on their work.
+We are grateful to the authors of the following papers for making their codebases public. This project builds on their work.
+- [Motion Planning around Obstacles with Convex Optimization](https://arxiv.org/abs/2205.04422) 
+- [Towards Tight Convex Relaxations for Contact-Rich Manipulation](https://arxiv.org/abs/2402.10312) 
+- [Using Graphs of Convex Sets to Guide Nonconvex Trajectory Optimization](https://ieeexplore.ieee.org/document/10802426)
 
 ---
 

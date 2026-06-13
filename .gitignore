@@ -21,3 +21,4 @@ benchmark_results
 quadrotor_demo.html
 quadrotor/models/room_gen/building.sdf
 viz
+underactuated/
