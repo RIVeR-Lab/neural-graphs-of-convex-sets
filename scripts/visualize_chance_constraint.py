@@ -76,9 +76,11 @@ def build_regions(grid: np.ndarray, start: np.ndarray, wall_offset: float,
         for j in range(-1, y_cells + 1):
             xy = (np.array([i, j]) - start) * 5
             if i >= 0 and j >= 0 and i < x_cells and j < y_cells and grid[i, j] > 0.5:
-                regions.append(HPolyhedron.MakeBox(
-                    [xy[0] - (2.5 - wall_offset), xy[1] - (2.5 - wall_offset), z_min],
-                    [xy[0] + (2.5 - wall_offset), xy[1] + (2.5 - wall_offset), z_max]))
+                half = 2.5 - wall_offset
+                if half > 0:
+                    regions.append(HPolyhedron.MakeBox(
+                        [xy[0] - half, xy[1] - half, z_min],
+                        [xy[0] + half, xy[1] + half, z_max]))
             else:
                 if i < 0 or j < 0 or i == x_cells or j == y_cells:
                     continue
@@ -101,16 +103,21 @@ def build_regions(grid: np.ndarray, start: np.ndarray, wall_offset: float,
                 if j < y_cells - 1 and i >= 0 and i < x_cells and grid[i, j + 1] > 0.5:
                     ub[1] -= wall_offset
 
+                def _try_box(lo, hi):
+                    lo, hi = np.array(lo, dtype=float), np.array(hi, dtype=float)
+                    if np.all(lo < hi):
+                        regions.append(HPolyhedron.MakeBox(lo, hi))
+
                 if np.random.random() < 1 - tree_probability:
-                    regions.append(HPolyhedron.MakeBox(lb, ub))
+                    _try_box(lb, ub)
                 else:
                     tree_pose = xy + 3.0 * np.random.rand(2) - 1.5
-                    regions.append(HPolyhedron.MakeBox(lb, [ub[0], tree_pose[1] - 0.5, ub[2]]))
-                    regions.append(HPolyhedron.MakeBox([lb[0], tree_pose[1] - 0.5, lb[2]],
-                                                       [tree_pose[0] - 0.5, tree_pose[1] + 0.5, ub[2]]))
-                    regions.append(HPolyhedron.MakeBox([tree_pose[0] + 0.5, tree_pose[1] - 0.5, lb[2]],
-                                                       [ub[0], tree_pose[1] + 0.5, ub[2]]))
-                    regions.append(HPolyhedron.MakeBox([lb[0], tree_pose[1] + 0.5, lb[2]], ub))
+                    _try_box(lb, [ub[0], tree_pose[1] - 0.5, ub[2]])
+                    _try_box([lb[0], tree_pose[1] - 0.5, lb[2]],
+                              [tree_pose[0] - 0.5, tree_pose[1] + 0.5, ub[2]])
+                    _try_box([tree_pose[0] + 0.5, tree_pose[1] - 0.5, lb[2]],
+                              [ub[0], tree_pose[1] + 0.5, ub[2]])
+                    _try_box([lb[0], tree_pose[1] + 0.5, lb[2]], ub)
 
     # door / window regions from outdoor edges are omitted here — they depend on
     # SDF placement logic and do not directly use wall_offset for sizing.
