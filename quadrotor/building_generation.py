@@ -8,13 +8,64 @@ from pydrake.math import RigidTransform, RollPitchYaw
 
 MODELS_DIR = Path(__file__).parent / "models"
 
+DEFAULT_GROW_PROBABILITY = 0.7
+DEFAULT_START_INDOOR = False
+DEFAULT_TREE_PROBABILITY = 0.7
 
-def generate_grid_world(shape, start, goal, seed=None):
+DEFAULT_INDOOR_OPTIONS = {
+    "models/room_gen/half_wall_horizontal.sdf": 0.5,
+    "models/room_gen/half_wall_horizontal_mirror.sdf": 0.5,
+    "models/room_gen/half_wall_vertical.sdf": 0.25,
+    "models/room_gen/wall_with_center_door_internal.sdf": 0.5,
+    "": 0.25,
+}
+DEFAULT_WALL_OPTIONS = {
+    "models/room_gen/just_wall.sdf": 1.0,
+    "models/room_gen/wall_with_center_door.sdf": 0.1,
+    "models/room_gen/wall_with_left_window.sdf": 0.05,
+    "models/room_gen/wall_with_right_window.sdf": 0.05,
+    "models/room_gen/wall_with_windows.sdf": 0.02,
+}
+
+# Mostly-indoor scenes with doors/windows on exterior and interior walls.
+MOSTLY_INDOOR_GROW_PROBABILITY = 1.0
+MOSTLY_INDOOR_START_INDOOR = True
+MOSTLY_INDOOR_TREE_PROBABILITY = 0.0
+DOORS_WINDOWS_INDOOR_OPTIONS = {
+    "models/room_gen/wall_with_center_door_internal.sdf": 1.0,
+    "models/room_gen/half_wall_horizontal.sdf": 0.15,
+    "models/room_gen/half_wall_horizontal_mirror.sdf": 0.15,
+    "models/room_gen/half_wall_vertical.sdf": 0.1,
+    "": 0.05,
+}
+DOORS_WINDOWS_WALL_OPTIONS = {
+    "models/room_gen/just_wall.sdf": 0.05,
+    "models/room_gen/wall_with_center_door.sdf": 0.35,
+    "models/room_gen/wall_with_left_window.sdf": 0.2,
+    "models/room_gen/wall_with_right_window.sdf": 0.2,
+    "models/room_gen/wall_with_windows.sdf": 0.2,
+}
+
+
+def diagonal_start_goal(shape):
+    """Grid indices for opposite corners (bottom-left, top-right)."""
+    return np.array([0, 0]), np.array([shape[0] - 1, shape[1] - 1])
+
+
+def generate_grid_world(
+    shape,
+    start,
+    goal,
+    seed=None,
+    *,
+    grow_probability=DEFAULT_GROW_PROBABILITY,
+    start_indoor=DEFAULT_START_INDOOR,
+):
     if seed is not None:
         np.random.seed(seed)
 
     grid = np.zeros(shape) - 1
-    grid[start[0], start[1]] = 0
+    grid[start[0], start[1]] = 1 if start_indoor else 0
     grid[goal[0], goal[1]] = 1
 
     growth_queue = [goal]
@@ -26,7 +77,7 @@ def generate_grid_world(shape, start, goal, seed=None):
                 continue
             if grid[target[0], target[1]] >= 0:
                 continue
-            grow = np.random.random() > 0.3
+            grow = np.random.random() < grow_probability
             if grow:
                 grid[target[0], target[1]] = 1
                 growth_queue.append(target)
@@ -75,25 +126,26 @@ def draw_grid_world(grid, start, goal, indoor_edges, outdoor_edges):
     plt.legend()
 
 
-def compile_sdf(output_file, grid, start, goal, indoor_edges, outdoor_edges, seed=None):
+def compile_sdf(
+    output_file,
+    grid,
+    start,
+    goal,
+    indoor_edges,
+    outdoor_edges,
+    seed=None,
+    *,
+    indoor_options=None,
+    wall_options=None,
+    tree_probability=DEFAULT_TREE_PROBABILITY,
+):
     if seed is not None:
         np.random.seed(seed)
 
-    indoor_options = {
-        "models/room_gen/half_wall_horizontal.sdf": 0.5,
-        "models/room_gen/half_wall_horizontal_mirror.sdf": 0.5,
-        "models/room_gen/half_wall_vertical.sdf": 0.25,
-        "models/room_gen/wall_with_center_door_internal.sdf": 0.5,
-        "": 0.25,
-    }
-    wall_options = {
-        "models/room_gen/just_wall.sdf": 1.0,
-        "models/room_gen/wall_with_center_door.sdf": 0.1,
-        "models/room_gen/wall_with_left_window.sdf": 0.05,
-        "models/room_gen/wall_with_right_window.sdf": 0.05,
-        "models/room_gen/wall_with_windows.sdf": 0.02,
-    }
-    tree_probability = 0.7
+    if indoor_options is None:
+        indoor_options = DEFAULT_INDOOR_OPTIONS
+    if wall_options is None:
+        wall_options = DEFAULT_WALL_OPTIONS
 
     root_item = ET.Element('sdf', version="1.5", nsmap={'drake': 'drake.mit.edu'})
     model_item = ET.SubElement(root_item, "model", name="building")

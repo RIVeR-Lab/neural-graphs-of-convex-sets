@@ -4,6 +4,14 @@ This repository contains the code associated to our paper [Learning to Plan on G
 
 **TL;DR:** We accelerate motion planning in Graphs of Convex Sets by replacing the convex relaxation stage with a Graph Neural Network that predicts edge flows, from which we sample candidate paths. A RankNet-style ranker identifies the top candidate paths, and we round only those paths. A RankNet-style ranker identifies the top candidate paths, and we solve convex restrictions only for those paths. We demonstrate the proposed approach on obstacle-free motion planning for a quadrotor and a robotic manipulator, as well as planning through contact.
 
+**Generalization dataset (mostly-indoor 3×3 / 4×4 / 5×5, convex + nonlinear GCS):**
+
+```console
+bash scripts/quadrotor_collect_generalization.sh
+```
+
+Writes `quadrotor/dataset/quadrotor_gcs_convex.h5` and `quadrotor/dataset/quadrotor_gcs_nonlinear.h5` (700 instances per file: 500 train @ 4×4, 50 val + 50 test @ 3×3 and 5×5). Requires MOSEK and SNOPT. See `scripts/quadrotor_collect_generalization.sh` for split counts and other parameters.
+
 ## Acknowledgments
 
 We are grateful to the authors of the following papers for making their codebases public. This project builds on their work.
