@@ -13,16 +13,20 @@
 planning_through_contact/dataset/data*
 *wandb*
 checkpoints*
-# *.pdf
+*.pdf
 *events.out.tfevents*
 runs/
 benchmark_results
 *claude
-quadrotor_demo.html
+*.html
 quadrotor/models/room_gen/building.sdf
 quadrotor/models/room_gen/building_gen_*.sdf
 quadrotor/models/room_gen/building_indoor_*.sdf
 quadrotor/results/indoor_viz/
 quadrotor/dataset/
 viz
+manipulation/results/
+manipulation/data/
+manipulation/vendor/
 underactuated/
+*.png

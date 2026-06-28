@@ -67,6 +67,87 @@ from planning_through_contact.visualize.colors import (
 # core planning + plotting can run on headless systems without `tkinter`.
 
 
+GOAL_OVERLAY_COLOR = COLORS["aquamarine4"].diffuse()
+
+# Match Meshcat tabletop playback (ik_only_playback.py).
+PUSHER_NON_CONTACT_COLOR = EMERALDGREEN.diffuse()
+PUSHER_CONTACT_COLOR = CRIMSON.diffuse()
+
+
+def _pusher_color_for_knot_points(knot_points) -> npt.NDArray[np.float64]:
+    if isinstance(knot_points, FaceContactVariables):
+        return PUSHER_CONTACT_COLOR
+    return PUSHER_NON_CONTACT_COLOR
+
+
+def _contact_mode_legend_handles(
+    *,
+    marker_size: float = 8.0,
+    goal_linewidth: float = 1.5,
+) -> list:
+    return [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="None",
+            markerfacecolor=PUSHER_NON_CONTACT_COLOR,
+            markeredgecolor=BLACK.diffuse(),
+            markersize=marker_size,
+            label="Pusher (non-contact)",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="None",
+            markerfacecolor=PUSHER_CONTACT_COLOR,
+            markeredgecolor=BLACK.diffuse(),
+            markersize=marker_size,
+            label="Pusher (contact)",
+        ),
+        mpatches.Patch(
+            facecolor="none",
+            edgecolor=GOAL_OVERLAY_COLOR,
+            linewidth=goal_linewidth,
+            linestyle="--",
+            label="Goal",
+        ),
+    ]
+
+
+def _add_dashed_goal_overlay(ax, traj: PlanarPushingTrajectory) -> None:
+    """Dashed outline for the final slider (and pusher) pose."""
+    vertices = np.hstack(
+        traj.config.slider_geometry.vertices + [traj.config.slider_geometry.vertices[0]]
+    )
+    target = traj.target_slider_planar_pose
+    p_WB = target.pos()
+    R_WB = target.rot_matrix()[:2, :2]
+    goal_vertices_W = p_WB + R_WB.dot(vertices)
+    ax.plot(
+        goal_vertices_W[0, :],
+        goal_vertices_W[1, :],
+        color=GOAL_OVERLAY_COLOR,
+        linewidth=1.5,
+        linestyle="--",
+        alpha=1.0,
+        zorder=100,
+    )
+    target_pusher = traj.target_pusher_planar_pose
+    if target_pusher is not None:
+        circle = plt.Circle(
+            target_pusher.pos().flatten(),
+            traj.config.pusher_radius,  # type: ignore
+            edgecolor=GOAL_OVERLAY_COLOR,
+            facecolor="none",
+            linewidth=1.5,
+            linestyle="--",
+            zorder=100,
+        )
+        ax.add_patch(circle)
+
+
 def _set_type1_serif_font() -> None:
     """
     Configure Matplotlib to use a serif font without spamming `findfont` warnings
@@ -934,7 +1015,7 @@ def make_traj_figure(
 
                 if isinstance(traj_segment, NonCollisionTrajSegment):
                     num_frames_in_segment = num_non_collision_frames
-                    segment_pusher_color = CRIMSON.diffuse()
+                    segment_pusher_color = PUSHER_NON_CONTACT_COLOR
 
                     if segment_idx < len(segment_groups) - 1:
                         num_frames_in_group = (
@@ -946,7 +1027,7 @@ def make_traj_figure(
                         )
                 else:  # face contact
                     num_frames_in_segment = num_contact_frames
-                    segment_pusher_color = EMERALDGREEN.diffuse()
+                    segment_pusher_color = PUSHER_CONTACT_COLOR
                     # Only one face contact
                     num_frames_in_group = num_frames_in_segment
 
@@ -1085,7 +1166,12 @@ def make_traj_figure(
                         np.any(next_p_WP != p_WP)
                         or element_idx == len(segment_group) - 1
                     ):
-                        ax.add_patch(make_circle(p_WP, fill_transparency))
+                        segment_pusher_color = _pusher_color_for_knot_points(knot_points)
+                        ax.add_patch(
+                            make_circle(
+                                p_WP, fill_transparency, color=segment_pusher_color
+                            )
+                        )
 
                     if plot_forces:
                         # Plot forces
@@ -1186,14 +1272,7 @@ def make_traj_figure(
                 loc="upper left",
             )
 
-    legend_handles = [
-        Line2D([0], [0], marker="o", linestyle="None",
-               markerfacecolor=EMERALDGREEN.diffuse(), markeredgecolor=BLACK.diffuse(),
-               markersize=8, label="Pusher (contact)"),
-        Line2D([0], [0], marker="o", linestyle="None",
-               markerfacecolor=CRIMSON.diffuse(), markeredgecolor=BLACK.diffuse(),
-               markersize=8, label="Pusher (non-contact)"),
-    ]
+    legend_handles = _contact_mode_legend_handles()
 
     if show_contact_legend:
         fig.legend(
@@ -1223,14 +1302,7 @@ def make_traj_figure(
                     bbox_inches=extent,
                 )
             # Save legend as its own standalone PDF
-            goal_handle = mpatches.Patch(
-                facecolor="none",
-                edgecolor=EMERALDGREEN.diffuse(),
-                linewidth=1.5,
-                linestyle="--",
-                label="Goal",
-            )
-            full_legend_handles = legend_handles + [goal_handle]
+            full_legend_handles = _contact_mode_legend_handles()
             fig_leg, ax_leg = plt.subplots(figsize=(3.2, 1.1))
             ax_leg.set_axis_off()
             ax_leg.legend(
@@ -1646,7 +1718,7 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
             pusher_radius,
             scene_graph,
             self.pusher_frame_id,
-            color=CRIMSON,
+            color=EMERALDGREEN,
         )
         self.pusher_contact_frame_id = scene_graph.RegisterFrame(
             self.source_id, GeometryFrame("pusher_contact")
@@ -1656,7 +1728,7 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
             pusher_radius,
             scene_graph,
             self.pusher_contact_frame_id,
-            color=EMERALDGREEN,
+            color=CRIMSON,
         )
 
         GOAL_TRANSPARENCY = 0.3
@@ -1710,6 +1782,7 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
         traj: PlanarPushingTrajectory,
         scene_graph: SceneGraph,
         visualize_knot_points: bool = False,
+        visualize_goal: bool = True,
         name: str = "traj_geometry ",
     ) -> "PlanarPushingTrajectory":
         traj_geometry = builder.AddNamedSystem(
@@ -1718,6 +1791,7 @@ class PlanarPushingTrajectoryGeometry(LeafSystem):
                 traj,
                 scene_graph,
                 visualize_knot_points,
+                visualize_goal=visualize_goal,
             ),
         )
         builder.Connect(
@@ -1912,6 +1986,7 @@ def visualize_planar_pushing_trajectory(
         traj,
         scene_graph,
         visualize_knot_points,
+        visualize_goal=False,
     )
 
     if lims is None:
@@ -1951,34 +2026,17 @@ def visualize_planar_pushing_trajectory(
     if show_contact_legend:
         legend_marker_size = 8 * float(overlay_scale)
         legend_font_size = 10 * float(overlay_scale)
-        legend_handles = [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                markerfacecolor=CRIMSON.diffuse(),
-                markeredgecolor=BLACK.diffuse(),
-                markersize=legend_marker_size,
-                label="Pusher (non-contact)",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                markerfacecolor=EMERALDGREEN.diffuse(),
-                markeredgecolor=BLACK.diffuse(),
-                markersize=legend_marker_size,
-                label="Pusher (contact)",
-            ),
-        ]
+        legend_handles = _contact_mode_legend_handles(
+            marker_size=legend_marker_size,
+        )
         visualizer.ax.legend(
             handles=legend_handles,
             loc="upper left",
             framealpha=0.9,
             fontsize=legend_font_size,
         )
+
+    _add_dashed_goal_overlay(visualizer.ax, traj)
 
     diagram = builder.Build()
     diagram.set_name("diagram")

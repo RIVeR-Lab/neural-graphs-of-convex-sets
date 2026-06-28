@@ -1,6 +1,12 @@
 directives:
 - add_directives:
-    file: package://planning_through_contact/iiwa_controller_plant.yaml
-- add_directives:
     file: package://planning_through_contact/small_table.yaml
-
+- add_directives:
+    file: package://planning_through_contact/iiwa_arm_and_pusher.yaml
+- add_weld:
+    parent: small_table::TableTop
+    child: iiwa::iiwa_link_0
+    X_PC:
+        rotation: !Rpy { deg: [0.0, 0.0, 0.0]}
+        # Slightly above TableTop (z=0) so link_0 mesh clears the 5 cm table solid.
+        translation: [-0.38, -0.15, 0.02]

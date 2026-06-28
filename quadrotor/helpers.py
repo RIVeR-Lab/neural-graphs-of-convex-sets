@@ -3,12 +3,28 @@ import os
 import pickle
 import time
 
+from pydrake.math import RigidTransform
 from pydrake.solvers import MosekSolver
 from pydrake.systems.framework import LeafSystem
 
 from quadrotor.gcs.bezier import BezierGCS
 from quadrotor.gcs.rounding import randomForwardPathSearch
 from quadrotor.building_generation import generate_grid_world, compile_sdf
+
+
+from pydrake.systems.framework import LeafSystem
+
+
+def compute_flat_quadrotor_state(traj, t: float) -> np.ndarray:
+    """Flat-output quadrotor state [xyz, rpy, xyz_dot, rpy_dot] at time ``t``."""
+    q = np.squeeze(traj.value(t))
+    q_dot = np.squeeze(traj.EvalDerivative(t))
+    q_ddot = np.squeeze(traj.EvalDerivative(t, 2))
+
+    fz = np.sqrt(q_ddot[0]**2 + q_ddot[1]**2 + (q_ddot[2] + 9.81)**2)
+    r = np.arcsin(-q_ddot[1] / fz)
+    p = np.arcsin(q_ddot[0] / fz)
+    return np.concatenate((q, [r, p, 0], q_dot, np.zeros(3)))
 
 
 class FlatnessInverter(LeafSystem):
@@ -20,27 +36,36 @@ class FlatnessInverter(LeafSystem):
         self.animator = animator
         self.t_offset = t_offset
         self.port = self.DeclareVectorOutputPort(
-            "state", 12, self.DoCalcState, {self.time_ticket()})
+            "state", 12, self.DoCalcState, {self.time_ticket()}
+        )
 
     def DoCalcState(self, context, output):
         t = context.get_time() + self.t_offset - 1e-4
-
         q = np.squeeze(self.traj.value(t))
-        q_dot = np.squeeze(self.traj.EvalDerivative(t))
-        q_ddot = np.squeeze(self.traj.EvalDerivative(t, 2))
-
-        fz = np.sqrt(q_ddot[0]**2 + q_ddot[1]**2 + (q_ddot[2] + 9.81)**2)
-        r = np.arcsin(-q_ddot[1] / fz)
-        p = np.arcsin(q_ddot[0] / fz)
-
-        output.set_value(np.concatenate((q, [r, p, 0], q_dot, np.zeros(3))))
+        output.set_value(compute_flat_quadrotor_state(self.traj, t))
 
         if self.animator is not None:
-            from pydrake.math import RigidTransform
             frame = self.animator.frame(context.get_time())
             self.animator.SetProperty(
-                frame, "/Cameras/default/rotated/<object>", "position", [-2.5, 4, 2.5])
+                frame, "/Cameras/default/rotated/<object>", "position", [-2.5, 4, 2.5]
+            )
             self.animator.SetTransform(frame, "/drake", RigidTransform(-q))
+
+
+class TrailFlatnessInverter(LeafSystem):
+    """Flatness inverter lagged by a fixed simulation-time offset (pose trail ghost)."""
+
+    def __init__(self, traj, lag_s: float):
+        LeafSystem.__init__(self)
+        self.traj = traj
+        self.lag_s = float(lag_s)
+        self.port = self.DeclareVectorOutputPort(
+            "state", 12, self.DoCalcState, {self.time_ticket()}
+        )
+
+    def DoCalcState(self, context, output):
+        t = max(float(self.traj.start_time()), context.get_time() - self.lag_s)
+        output.set_value(compute_flat_quadrotor_state(self.traj, t - 1e-4))
 
 
 def generate_buildings(save_location, num_buildings, building_shape=(3, 3), seed=None):

@@ -103,6 +103,25 @@ def solve_nonlinear_restriction(graph, source_vertex, target_vertex, path_edges)
     return result
 
 
+def path_edges_to_active_vertices(path_edges) -> list:
+    """Ordered vertex list along a GCS path (for SolveConvexRestriction)."""
+    vertices = []
+    seen: set[int] = set()
+    for edge in path_edges:
+        for vertex in (edge.u(), edge.v()):
+            vid = vertex.id()
+            if vid not in seen:
+                vertices.append(vertex)
+                seen.add(vid)
+    return vertices
+
+
+def solve_nonlinear_restriction_trajectory(gcs, path_edges):
+    """Solve a rounded nonlinear path and return (trajectory, result)."""
+    vertices = path_edges_to_active_vertices(path_edges)
+    return gcs.SolveConvexRestriction(vertices, _nonlinear_gcs_options(restriction=True))
+
+
 def plan_nonlinear_gcs(
     regions: Sequence[HPolyhedron],
     edges_between_regions: Sequence[tuple[int, int]],

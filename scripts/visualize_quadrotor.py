@@ -26,7 +26,15 @@ import numpy as np
 import torch
 
 from pydrake.examples import QuadrotorGeometry
-from pydrake.geometry import Cylinder, Mesh, MeshcatVisualizer, Rgba, Sphere, StartMeshcat
+from pydrake.geometry import (
+    Cylinder,
+    Mesh,
+    MeshcatAnimation,
+    MeshcatVisualizer,
+    Rgba,
+    Sphere,
+    StartMeshcat,
+)
 from pydrake.math import BsplineBasis, RigidTransform
 from pydrake.multibody.parsing import Parser
 from pydrake.multibody.plant import AddMultibodyPlantSceneGraph
@@ -37,6 +45,37 @@ from pydrake.trajectories import BsplineTrajectory
 
 logging.getLogger("drake").setLevel(logging.WARNING)
 
+# Meshcat's static HTML player resets all clips to frame 0 when playback finishes,
+# which snaps the quadrotor back to the start and looks like looping.
+_MESHCAT_FINISH_RESET_BUG = (
+    "if(this.actions.every((A=>A.paused))){this.pause();for(let A of this.actions)A.reset()}"
+)
+_MESHCAT_FINISH_RESET_FIX = "if(this.actions.every((A=>A.paused))){this.pause()}"
+
+
+def configure_meshcat_recording_play_once(recording: MeshcatAnimation) -> None:
+    recording.set_loop_mode(MeshcatAnimation.LoopMode.kLoopOnce)
+    recording.set_repetitions(1)
+    recording.set_clamp_when_finished(True)
+    recording.set_autoplay(True)
+
+
+def publish_meshcat_recording_play_once(meshcat_viz: MeshcatVisualizer) -> None:
+    configure_meshcat_recording_play_once(meshcat_viz.get_mutable_recording())
+    meshcat_viz.PublishRecording()
+
+
+def patch_meshcat_html_play_once(html: str) -> str:
+    if _MESHCAT_FINISH_RESET_BUG not in html:
+        return html
+    return html.replace(_MESHCAT_FINISH_RESET_BUG, _MESHCAT_FINISH_RESET_FIX, 1)
+
+
+def write_meshcat_html(meshcat, out_path: Path, *, meshcat_viz: MeshcatVisualizer) -> None:
+    publish_meshcat_recording_play_once(meshcat_viz)
+    out_path.write_text(patch_meshcat_html_play_once(meshcat.StaticHtml()))
+
+
 from planning_through_contact.model.hparams import DecoderHParams, EncoderHParams
 from planning_through_contact.model.inference import project_flows_qp
 from planning_through_contact.model.model import GCSFlowPredictor
@@ -46,6 +85,7 @@ from quadrotor.building_generation import compile_sdf, generate_grid_world, MODE
 from quadrotor.gcs.bezier import BezierTrajectory
 from quadrotor.gcs.rounding import randomForwardPathSearch
 from quadrotor.helpers import build_bezier_gcs, FlatnessInverter
+from quadrotor.gcs.viz_utils import add_quadrotor_pose_trail, apply_trail_opacities
 
 # 3x3 grid — same as training distribution
 GRID_SHAPE = (3, 3)
@@ -365,18 +405,30 @@ def plan(regions, start_pose, goal_pose, flow_model, solver, device, ranker=None
 # ---------- meshcat rendering ----------
 
 
-def _render_label_png(text: str, color_hex: str) -> bytes:
-    """Render `text` to an in-memory PNG (bold black-bordered text on white)."""
-    fig, ax = plt.subplots(figsize=(6, 2), dpi=150)
+LABEL_FONT_SIZE = 72
+
+
+def _png_dimensions(png_bytes: bytes) -> tuple[int, int]:
+    """Read width/height from a PNG IHDR chunk."""
+    if len(png_bytes) < 24 or png_bytes[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    return struct.unpack(">II", png_bytes[16:24])
+
+
+def _render_label_png(text: str, color_hex: str) -> tuple[bytes, float]:
+    """Render `text` to PNG bytes and its width/height aspect ratio."""
+    fig, ax = plt.subplots(figsize=(4, 1.5), dpi=150)
     ax.set_axis_off()
     fig.patch.set_facecolor("white")
-    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
     ax.text(0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center",
-            fontsize=110, fontweight="bold", color=color_hex, family="sans-serif")
+            fontsize=LABEL_FONT_SIZE, fontweight="bold", color=color_hex, family="sans-serif")
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, facecolor="white")
+    fig.savefig(buf, format="png", dpi=150, facecolor="white",
+                bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
-    return buf.getvalue()
+    png_bytes = buf.getvalue()
+    width, height = _png_dimensions(png_bytes)
+    return png_bytes, width / height
 
 
 def _write_text_label_gltf(text: str, color_hex: str, assets_dir: Path,
@@ -388,9 +440,7 @@ def _write_text_label_gltf(text: str, color_hex: str, assets_dir: Path,
     The quad lies in the X-Z plane with normal +Y, so it reads correctly from
     the default chase-cam viewing direction.
     """
-    png_bytes = _render_label_png(text, color_hex)
-
-    aspect = 3.0
+    png_bytes, aspect = _render_label_png(text, color_hex)
     width = quad_height * aspect
     half_w, half_h = width / 2, quad_height / 2
 
@@ -464,8 +514,48 @@ def _write_text_label_gltf(text: str, color_hex: str, assets_dir: Path,
     return gltf_path, width
 
 
+def draw_start_goal_markers(
+    meshcat,
+    start_pose,
+    goal_pose,
+    assets_dir: Path,
+    *,
+    label_offsets=None,
+    trace_prefix: str = "/drake/trace",
+) -> None:
+    """Colored ball-on-flagpole markers with glTF text labels at start/goal."""
+    pole_h = 1.2
+    label_lift = 0.5
+    for name, pos, rgba, color_hex in (
+        ("START", np.asarray(start_pose), Rgba(0.1, 0.9, 0.2, 1.0), "#0e8a26"),
+        ("GOAL", np.asarray(goal_pose), Rgba(0.95, 0.15, 0.15, 1.0), "#c81616"),
+    ):
+        root = f"{trace_prefix}/{name}"
+        meshcat.SetObject(f"{root}/marker", Sphere(0.14), rgba)
+        meshcat.SetTransform(f"{root}/marker", RigidTransform(pos))
+        meshcat.SetObject(f"{root}/pole", Cylinder(0.02, pole_h), rgba)
+        meshcat.SetTransform(
+            f"{root}/pole",
+            RigidTransform(pos + np.array([0.0, 0.0, pole_h / 2])),
+        )
+        meshcat.SetObject(f"{root}/flag", Sphere(0.18), rgba)
+        meshcat.SetTransform(
+            f"{root}/flag",
+            RigidTransform(pos + np.array([0.0, 0.0, pole_h])),
+        )
+        gltf_path, _ = _write_text_label_gltf(name, color_hex, assets_dir, name.lower())
+        meshcat.SetObject(f"{root}/label", Mesh(str(gltf_path), 1.0))
+        extra = np.zeros(3)
+        if label_offsets and name in label_offsets:
+            extra = np.asarray(label_offsets[name], dtype=float)
+        meshcat.SetTransform(
+            f"{root}/label",
+            RigidTransform(pos + np.array([0.0, 0.0, pole_h + label_lift]) + extra),
+        )
+
+
 def render_html(traj, start_pose, goal_pose, seed, out_path, show_trace=True,
-                label_offsets=None):
+                label_offsets=None, trail_seconds: float = 5.8, trail_poses: int = 6):
     meshcat = StartMeshcat()
     meshcat.SetProperty("/Grid", "visible", False)
     meshcat.SetProperty("/Axes", "visible", False)
@@ -482,9 +572,21 @@ def render_html(traj, start_pose, goal_pose, seed, out_path, show_trace=True,
     animator = meshcat_viz.StartRecording()
     traj_system = builder.AddSystem(FlatnessInverter(traj, animator))
     QuadrotorGeometry.AddToBuilder(builder, traj_system.get_output_port(0), scene_graph)
+    trail_prefixes = add_quadrotor_pose_trail(
+        builder,
+        scene_graph,
+        traj,
+        trail_seconds=trail_seconds,
+        trail_poses=trail_poses,
+    )
 
     diagram = builder.Build()
     meshcat.Delete()
+    if trail_prefixes:
+        context = diagram.CreateDefaultContext()
+        meshcat_viz.ForcedPublish(meshcat_viz.GetMyContextFromRoot(context))
+        apply_trail_opacities(meshcat, trail_prefixes)
+        print(f"  pose trail: {trail_poses} ghosts over last {trail_seconds:g}s")
 
     # Trace: sample the trajectory densely and draw as a polyline + endpoint markers.
     # Parent under /drake so the chase-cam transform applied to /drake each frame
@@ -500,41 +602,16 @@ def render_html(traj, start_pose, goal_pose, seed, out_path, show_trace=True,
         meshcat.SetLine("/drake/trace/path", vertices, line_width=3.0,
                         rgba=Rgba(1.0, 0.85, 0.1, 1.0))
 
-    pole_h = 1.2
-    label_lift = 0.5  # how far above the flag the text sits
     assets_dir = Path(tempfile.mkdtemp(prefix="meshcat_labels_"))
     try:
-        for name, pos, rgba, color_hex in (
-            ("START", np.asarray(start_pose), Rgba(0.1, 0.9, 0.2, 1.0),  "#0e8a26"),
-            ("GOAL",  np.asarray(goal_pose),  Rgba(0.95, 0.15, 0.15, 1.0), "#c81616"),
-        ):
-            root = f"/drake/trace/{name}"
-            meshcat.SetObject(f"{root}/marker", Sphere(0.14), rgba)
-            meshcat.SetTransform(f"{root}/marker", RigidTransform(pos))
-            meshcat.SetObject(f"{root}/pole", Cylinder(0.02, pole_h), rgba)
-            meshcat.SetTransform(f"{root}/pole",
-                                 RigidTransform(pos + np.array([0.0, 0.0, pole_h / 2])))
-            meshcat.SetObject(f"{root}/flag", Sphere(0.18), rgba)
-            meshcat.SetTransform(f"{root}/flag",
-                                 RigidTransform(pos + np.array([0.0, 0.0, pole_h])))
-
-            gltf_path, _ = _write_text_label_gltf(name, color_hex, assets_dir, name.lower())
-            meshcat.SetObject(f"{root}/label", Mesh(str(gltf_path), 1.0))
-            extra_offset = np.zeros(3)
-            if label_offsets and name in label_offsets:
-                extra_offset = np.asarray(label_offsets[name], dtype=float)
-            meshcat.SetTransform(
-                f"{root}/label",
-                RigidTransform(pos + np.array([0.0, 0.0, pole_h + label_lift]) + extra_offset),
-            )
+        draw_start_goal_markers(
+            meshcat, start_pose, goal_pose, assets_dir, label_offsets=label_offsets,
+        )
 
         simulator = Simulator(diagram)
         simulator.set_target_realtime_rate(0.0)
         simulator.AdvanceTo(traj.end_time() + 0.05)
-        meshcat_viz.PublishRecording()
-
-        html = meshcat.StaticHtml()
-        out_path.write_text(html)
+        write_meshcat_html(meshcat, out_path, meshcat_viz=meshcat_viz)
         print(f"Saved → {out_path}")
     finally:
         shutil.rmtree(assets_dir, ignore_errors=True)
@@ -570,6 +647,18 @@ def main():
                         default=True,
                         help="Draw the yellow trajectory polyline (default: on). "
                              "Use --no-trace to hide it.")
+    parser.add_argument(
+        "--trail-seconds",
+        type=float,
+        default=5.8,
+        help="Ghost trail length in simulation seconds (0 disables trail).",
+    )
+    parser.add_argument(
+        "--trail-poses",
+        type=int,
+        default=6,
+        help="Number of ghost quad poses in the trail window.",
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -651,7 +740,9 @@ def main():
             print(f"  Rendering Meshcat HTML... (trace: {'on' if args.trace else 'off'})")
             render_html(traj, start_pose, goal_pose, seed, out_path,
                         show_trace=args.trace,
-                        label_offsets=label_offsets_by_seed.get(seed))
+                        label_offsets=label_offsets_by_seed.get(seed),
+                        trail_seconds=args.trail_seconds,
+                        trail_poses=args.trail_poses)
 
 
 if __name__ == "__main__":
