@@ -8,6 +8,9 @@
             <uri>shelves.obj</uri>
           </mesh>
         </geometry>
+        <material>
+          <diffuse>0.75 0.72 0.68 1</diffuse>
+        </material>
       </visual>
       <!--
       <visual name="right_wall">

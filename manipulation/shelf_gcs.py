@@ -109,24 +109,38 @@ def default_iris_options() -> IrisOptions:
 
 
 def _calc_region_worker(seed: np.ndarray):
-    global _WORKER_PLANT, _WORKER_DIAGRAM, _WORKER_IRIS_OPTIONS
-    context = _WORKER_DIAGRAM.CreateDefaultContext()
-    plant_context = _WORKER_PLANT.GetMyMutableContextFromRoot(context)
-    _WORKER_PLANT.SetPositions(plant_context, seed)
-    t0 = time.time()
-    hpoly = IrisNp(_WORKER_PLANT, plant_context, _WORKER_IRIS_OPTIONS)
-    print(f"  IRIS seed done in {time.time() - t0:.1f}s", flush=True)
-    return hpoly
+    global _WORKER_PLANT, _WORKER_DIAGRAM, _WORKER_IRIS_OPTIONS, _WORKER_SKIP_FAILED
+    try:
+        context = _WORKER_DIAGRAM.CreateDefaultContext()
+        plant_context = _WORKER_PLANT.GetMyMutableContextFromRoot(context)
+        _WORKER_PLANT.SetPositions(plant_context, seed)
+        t0 = time.time()
+        hpoly = IrisNp(_WORKER_PLANT, plant_context, _WORKER_IRIS_OPTIONS)
+        print(f"  IRIS seed done in {time.time() - t0:.1f}s", flush=True)
+        return hpoly
+    except RuntimeError as exc:
+        if _WORKER_SKIP_FAILED:
+            print(f"  IRIS seed skipped: {exc}", flush=True)
+            return None
+        raise
 
 
 _WORKER_PLANT = None
 _WORKER_DIAGRAM = None
 _WORKER_IRIS_OPTIONS = None
+_WORKER_SKIP_FAILED = False
 
 
-def generate_regions(plant, diagram, seed_points: dict, *, workers: int | None = None) -> dict:
+def generate_regions(
+    plant,
+    diagram,
+    seed_points: dict,
+    *,
+    workers: int | None = None,
+    skip_failed: bool = False,
+) -> dict:
     """Grow IRIS regions in configuration space from named seed configs."""
-    global _WORKER_PLANT, _WORKER_DIAGRAM, _WORKER_IRIS_OPTIONS
+    global _WORKER_PLANT, _WORKER_DIAGRAM, _WORKER_IRIS_OPTIONS, _WORKER_SKIP_FAILED
     if workers is None:
         workers = mp.cpu_count()
     names = list(seed_points.keys())
@@ -136,14 +150,18 @@ def generate_regions(plant, diagram, seed_points: dict, *, workers: int | None =
     print(f"Generating {len(seeds)} IRIS regions with {workers} worker(s)...")
     t0 = time.time()
     _WORKER_PLANT, _WORKER_DIAGRAM, _WORKER_IRIS_OPTIONS = plant, diagram, iris_options
+    _WORKER_SKIP_FAILED = skip_failed
+
     if workers <= 1:
         regions = [_calc_region_worker(seed) for seed in seeds]
     else:
         ctx = mp.get_context("fork")
         with ctx.Pool(processes=workers) as pool:
             regions = pool.map(_calc_region_worker, seeds)
-    print(f"Generated {len(regions)} IRIS regions in {time.time() - t0:.1f}s")
-    return dict(zip(names, regions))
+
+    out = {name: region for name, region in zip(names, regions) if region is not None}
+    print(f"Generated {len(out)}/{len(seeds)} IRIS regions in {time.time() - t0:.1f}s")
+    return out
 
 
 def load_regions(path: Path) -> dict:
@@ -234,8 +252,11 @@ def plan_and_make_trajectory(
     speed: float = 2.0,
     verbose: bool = False,
 ):
-    path, solve_time, _ = plan_gcs_path(regions, sequence, seed=seed, verbose=verbose)
+    path, solve_time, segment_results = plan_gcs_path(
+        regions, sequence, seed=seed, verbose=verbose,
+    )
     if path is None:
-        return None, None, solve_time
+        return None, None, solve_time, float("nan")
+    total_cost = sum(r.get("rounded_cost", 0.0) for r in segment_results)
     traj = make_traj(path, speed=speed)
-    return path, traj, solve_time
+    return path, traj, solve_time, total_cost

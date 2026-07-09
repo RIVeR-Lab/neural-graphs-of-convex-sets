@@ -5,6 +5,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIPULATION_ROOT = REPO_ROOT / "manipulation"
 SCENE_MODELS_ROOT = MANIPULATION_ROOT / "scene_models"
+INFLATED_SCENE_ROOT = MANIPULATION_ROOT / "scene_models_inflated"
 VENDOR_MODELS_ROOT = MANIPULATION_ROOT / "vendor" / "drake" / "manipulation" / "models"
 IIWA_MODELS_ROOT = VENDOR_MODELS_ROOT / "iiwa_description"
 
@@ -38,6 +39,8 @@ def manipulation_models_hint() -> str:
 def register_package_maps(parser) -> None:
     """Register manipulation scene + robot package paths for model directives."""
     parser.package_map().Add("manipulation_scene", str(SCENE_MODELS_ROOT))
+    if INFLATED_SCENE_ROOT.is_dir():
+        parser.package_map().Add("manipulation_scene_inflated", str(INFLATED_SCENE_ROOT))
     if not manipulation_models_ready():
         raise FileNotFoundError(manipulation_models_hint())
     parser.package_map().Add("manipulation_models", str(VENDOR_MODELS_ROOT))

@@ -19,7 +19,6 @@ from pydrake.multibody.inverse_kinematics import InverseKinematics
 from pydrake.multibody.parsing import LoadModelDirectives, Parser, ProcessModelDirectives
 from pydrake.multibody.plant import AddMultibodyPlantSceneGraph, MultibodyPlant
 from pydrake.multibody.tree import RevoluteJoint
-from pydrake.perception import PointCloud
 from pydrake.solvers import Solve
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.framework import DiagramBuilder
@@ -38,14 +37,17 @@ def _add_gcs_package(parser: Parser) -> None:
     register_package_maps(parser)
 
 
-def build_shelf_plant(*, meshcat=None):
+def build_shelf_plant(*, meshcat=None, directives_path=None):
     """Build the IIWA + shelf + bins + table scene."""
+    if directives_path is None:
+        directives_path = DEFAULT_DIRECTIVES
+
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
     parser = Parser(plant, scene_graph)
     _add_gcs_package(parser)
 
-    directives = LoadModelDirectives(str(DEFAULT_DIRECTIVES))
+    directives = LoadModelDirectives(str(directives_path))
     ProcessModelDirectives(directives, plant, parser)
     plant.Finalize()
 
@@ -219,6 +221,8 @@ def visualize_trajectory(
     params.delete_on_initialization_event = False
     params.role = Role.kIllustration
     meshcat_viz = MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat, params)
+    meshcat.SetProperty("/Grid", "visible", True)
+    meshcat.SetProperty("/Lights/AmbientLight/<object>", "intensity", 0.85)
     meshcat.Delete()
 
     if show_line:
@@ -228,10 +232,12 @@ def visualize_trajectory(
         for i, traj in enumerate(traj_list):
             times = np.linspace(traj.start_time(), traj.end_time(), 500)
             poses = forward_kinematics(traj.vector_values(times).T.tolist())
-            pointcloud = PointCloud(len(poses))
-            pointcloud.mutable_xyzs()[:] = np.array([X.translation() for X in poses]).T
-            meshcat.SetObject(
-                f"paths/{i}", pointcloud, 0.015, rgba=Rgba(*colors[i % len(colors)]),
+            vertices = np.array([X.translation() for X in poses]).T
+            meshcat.SetLine(
+                f"paths/{i}",
+                vertices,
+                line_width=4.0,
+                rgba=Rgba(*colors[i % len(colors)]),
             )
 
     diagram = builder.Build()

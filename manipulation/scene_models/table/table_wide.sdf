@@ -8,6 +8,9 @@
             <uri>table_wide.obj</uri>
           </mesh>
         </geometry>
+        <material>
+          <diffuse>0.55 0.55 0.55 1</diffuse>
+        </material>
       </visual>
       <collision name="table_top">
         <pose> 0 0 -0.1 0 0 0</pose>
